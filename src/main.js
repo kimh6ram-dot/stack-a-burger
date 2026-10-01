@@ -10,6 +10,13 @@
   var resultLayers = document.getElementById('result-layers');
   var resultStats = document.getElementById('result-stats');
 
+  var btnTopping = document.getElementById('btn-topping');
+  var screenCompleted = document.getElementById('screen-completed');
+  var completedLayers = document.getElementById('completed-layers-title');
+  var btnSaveImage = document.getElementById('btn-save-image');
+  var btnCompletedRestart = document.getElementById('btn-completed-restart');
+  var btnCompletedHome = document.getElementById('btn-completed-home');
+
   var isTouch = BS.input.isTouchPrimary();
   BS.renderer.init(canvas, isTouch);
 
@@ -59,6 +66,8 @@
 
   var stageHLogical = 0;
   var shownResult = false;
+  var shownCompleted = false;
+  var isSavingImage = false;
 
   function handleResize() {
     var rect = container.getBoundingClientRect();
@@ -83,7 +92,18 @@
     BS.audio.unlock();
     screenResult.hidden = true;
     shownResult = false;
+    screenCompleted.hidden = true;
+    shownCompleted = false;
     BS.play.reset(BS.CONFIG.LOGICAL_WIDTH, stageHLogical);
+  }
+
+  function goHome() {
+    screenResult.hidden = true;
+    shownResult = false;
+    screenCompleted.hidden = true;
+    shownCompleted = false;
+    BS.play.reset(BS.CONFIG.LOGICAL_WIDTH, stageHLogical);
+    screenIntro.hidden = false;
   }
 
   function showResultIfNeeded(snap) {
@@ -95,6 +115,39 @@
     }
   }
 
+  function showCompletedIfNeeded(snap) {
+    if (snap.state === 'completed' && !shownCompleted) {
+      shownCompleted = true;
+      completedLayers.textContent = snap.layerCount + '층';
+      screenCompleted.hidden = false;
+    }
+  }
+
+  /* "빵 얹기" 버튼: PLAYING 상태 + 일반 재료 1개 이상 쌓였을 때만 활성.
+   * 낙하/정산/붕괴/완성 등 그 외 모든 상태에서는 숨기거나 비활성화한다(§4, §21). */
+  function updateToppingButton(snap) {
+    var relevant = snap.state === 'playing' || snap.state === 'release' ||
+      snap.state === 'falling' || snap.state === 'settling';
+    btnTopping.hidden = !(relevant && snap.layerCount >= 1);
+    btnTopping.disabled = snap.state !== 'playing';
+  }
+
+  function requestTopping() {
+    BS.play.requestTopping();
+  }
+
+  function saveCompletedImage() {
+    if (isSavingImage) return; // 저장 중 연속 클릭 방지(§21)
+    isSavingImage = true;
+    btnSaveImage.disabled = true;
+    var snap = BS.play.getSnapshotState();
+    var canvas = BS.exportCompletedImage(snap.stack, snap.layerCount);
+    BS.downloadCanvasAsPng(canvas, BS.exportFilename(), function () {
+      isSavingImage = false;
+      btnSaveImage.disabled = false;
+    });
+  }
+
   var lastTs = null;
   function loop(ts) {
     if (lastTs === null) lastTs = ts;
@@ -104,6 +157,8 @@
     var snap = BS.play.getSnapshotState();
     BS.renderer.render(snap, BS.CONFIG.LOGICAL_WIDTH, stageHLogical);
     showResultIfNeeded(snap);
+    showCompletedIfNeeded(snap);
+    updateToppingButton(snap);
     requestAnimationFrame(loop);
   }
 
@@ -111,6 +166,10 @@
   BS.input.attachKeyboard(requestDrop);
   btnStart.addEventListener('click', startGame);
   btnRestart.addEventListener('click', restartGame);
+  btnTopping.addEventListener('click', requestTopping);
+  btnSaveImage.addEventListener('click', saveCompletedImage);
+  btnCompletedRestart.addEventListener('click', restartGame);
+  btnCompletedHome.addEventListener('click', goHome);
 
   // 브라우저 resize뿐 아니라 줌/모바일 주소창 변화(visualViewport)·화면 회전까지
   // 전부 같은 handleResize()로 받아서, "지금 실제로 보이는 높이" 기준으로 즉시
@@ -128,5 +187,10 @@
     requestAnimationFrame(loop);
   });
 
-  window.BS_DEBUG = { get play() { return BS.play; }, get renderer() { return BS.renderer; }, restartGame: restartGame };
+  window.BS_DEBUG = {
+    get play() { return BS.play; }, get renderer() { return BS.renderer; },
+    restartGame: restartGame, goHome: goHome,
+    saveCompletedImage: saveCompletedImage,
+    get screenCompleted() { return screenCompleted; }, get btnTopping() { return btnTopping; }
+  };
 })();

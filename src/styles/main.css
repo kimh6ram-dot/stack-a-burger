@@ -138,3 +138,111 @@ body {
   cursor: pointer;
 }
 .cta:active { opacity: 0.85; }
+
+/* "빵 얹기" — PLAY 화면의 작은 보조 버튼. 우하단 플로팅, HUD(캔버스에 직접 그림)와
+ * 메인 drop 조작(캔버스 전체 pointerdown)을 가리지 않는 위치. */
+.topping-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: #000;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+}
+.topping-btn:active { opacity: 0.8; }
+.topping-btn[hidden] { display: none; }
+.topping-btn[disabled] { opacity: 0.35; pointer-events: none; }
+
+/* COMPLETED("빵 얹기" 완료) — RESULT(GAME OVER)와 동일하게 뷰포트 정중앙에 뜬다.
+ * 완성된 햄버거(캔버스, 반투명 패널 뒤로 그대로 노출)를 배경으로 유지한다. */
+#screen-completed {
+  background: transparent;
+  padding: 0;
+}
+#screen-completed:not([hidden]) {
+  display: block;
+}
+#screen-completed::before, #screen-completed::after { content: none; }
+.completed-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 32px);
+  max-width: var(--content-width);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--border);
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+.completed-actions {
+  margin-top: var(--gap-content-cta);
+  width: 100%;
+  max-width: var(--content-width);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.btn-save {
+  width: 100%;
+  height: 44px;
+  border: 1px solid var(--border);
+  background: #000;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.btn-save:active { opacity: 0.85; }
+.btn-save[disabled] { opacity: 0.5; pointer-events: none; }
+.completed-actions-secondary {
+  display: flex;
+  gap: 8px;
+}
+.btn-secondary {
+  flex: 1;
+  height: 38px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #000;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.btn-secondary:active { opacity: 0.8; }
+
+/* 계정 워터마크(2026-10-01) — `.app`의 직계 자식 DOM 요소 하나를 INTRO/PLAY/RESULT/
+ * COMPLETED 모든 화면이 공유한다(index.html에서 #stage 캔버스 바로 다음, 어느
+ * .screen 안에도 속하지 않음). "화면이 바뀌어도 위치·크기가 변하면 안 된다"는
+ * 피드백으로, 메인 화면 기준 고정 CSS px 값을 그대로 기준으로 삼았다 — 캔버스
+ * 스케일(기기 폭에 따라 달라짐)과는 완전히 무관해서 전환 시 1px도 움직이지 않는다.
+ * 저장 이미지(PNG 파일 자체)만 예외로 export.js에서 별도로 그린다(우하단, §21). */
+.watermark {
+  position: absolute;
+  left: 16px;
+  top: 23px; /* 플레이 화면 HUD의 BEST 텍스트(13px, 캔버스 기준선 hudY)와 세로 중심이
+                맞도록 실측 보정한 값(2026-10-01, scale=1 기준 canvas measureText로 산출) —
+                좌측 워터마크와 우측 BEST가 같은 높이에서 대칭으로 보이게 하기 위함 */
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+  z-index: 10;
+}

@@ -40,7 +40,8 @@ BS.renderer = (function () {
     var cam = snap.cameraY;
     var stack = snap.stack;
     var isCollapsing = (snap.state === 'collapsing' || snap.state === 'gameover-wait' || snap.state === 'gameover');
-    var settlingTopIndex = (snap.state === 'settling') ? stack.length - 1 : -1;
+    // topping-settle(빵 얹기 착지 임팩트)도 settling과 같은 압축/복귀 연출을 공유한다.
+    var settlingTopIndex = (snap.state === 'settling' || snap.state === 'topping-settle') ? stack.length - 1 : -1;
 
     // 흔들림(UNSTABLE) 피벗: 바닥(맨 아래 레이어) 중심의 화면 좌표
     var pivotX = stageW / 2, pivotY = stageH;
@@ -75,7 +76,8 @@ BS.renderer = (function () {
 
     if (settlingTopIndex >= 0) {
       var top = stack[settlingTopIndex];
-      var t = Math.min(1, snap.current ? snap.current.settleT / (BS.CONFIG.LAND_IMPACT_MS / 1000) : 1);
+      var settleSrc = snap.state === 'topping-settle' ? snap.topping : snap.current;
+      var t = Math.min(1, settleSrc ? settleSrc.settleT / (BS.CONFIG.LAND_IMPACT_MS / 1000) : 1);
       var squash = BS.CONFIG.LANDING_SQUASH_PX * Math.sin(t * Math.PI); // 눌렸다 복귀, 오버슈트 없음
       var dy = (top.topY - cam) + squash;
       var dh = Math.max(2, top.visualHeight - squash);
@@ -89,6 +91,11 @@ BS.renderer = (function () {
       drawFull(c.ingredient, c.x, c.renderScreenY, c.width, c.visualHeight);
     }
 
+    if (snap.state === 'topping' && snap.topping) {
+      var tb = snap.topping;
+      drawFull(tb.ingredient, tb.x, tb.worldY - cam, tb.width, tb.visualHeight);
+    }
+
     if (snap.perfectFlashTimer > 0 && stack.length) {
       var pTop = stack[stack.length - 1];
       ctx.fillStyle = '#000';
@@ -97,13 +104,18 @@ BS.renderer = (function () {
       ctx.fillText('PERFECT!', stageW / 2, Math.max(20, (pTop.topY - cam) - 18));
     }
 
-    // 컴팩트 HUD — 한 줄
+    // 컴팩트 HUD — 한 줄: 중앙 층수·점수 / 우측 BEST. 좌측은 워터마크 자리로 비워둔다
+    // (워터마크는 더 이상 캔버스에 그리지 않고, 메인 화면과 완전히 동일한 고정 CSS px
+    // DOM 요소 하나를 모든 화면이 공유한다 — 화면 전환 시 위치/크기가 절대 변하지
+    // 않도록 2026-10-01 재변경. index.html의 `.watermark` 참고).
     var C = BS.CONFIG;
     var hudY = C.PLAY_TOP_PADDING + C.HUD_HEIGHT * 0.68;
-    ctx.textAlign = 'left';
+
+    ctx.textAlign = 'center';
     ctx.fillStyle = '#000';
     ctx.font = '700 15px Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif';
-    ctx.fillText(snap.layerCount + '층 · SCORE ' + snap.score, 16, hudY);
+    ctx.fillText(snap.layerCount + '층 · SCORE ' + snap.score, stageW / 2, hudY);
+
     ctx.textAlign = 'right';
     ctx.fillStyle = '#777';
     ctx.font = '700 13px Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif';

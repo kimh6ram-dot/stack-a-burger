@@ -6,12 +6,12 @@ window.BS = window.BS || {};
 BS.CONFIG = {
   LOGICAL_WIDTH: 375,               // 기준 디자인 폭(logical px). 실제 화면 폭은 CSS에서 이 값으로 스케일링.
   PLAY_MARGIN: 4,                   // 재료가 왕복하는 좌우 경계 여백(게임 stage 기준 고정 — 스택 위치와 무관, §"이동 범위 실측" 참고)
-  INITIAL_STACK_WIDTH_RATIO: 0.42,  // 모든 재료가 공유하는 고정 폭 = LOGICAL_WIDTH * 이 값. 이 폭은 게임 내내 변하지 않는다.
-  // 0.70 → 0.56 → 0.50으로 줄여왔는데도 "아직 너무 쉽다, 여유 공간을 더 달라"는
-  // 피드백이 있었다. 0.42 + margin 4면 travel/W ≈ 1.33까지 늘어난다: 정중앙 스택
-  // 기준 첫수라도 극단으로 몰면 최소 supportRatio가 약 0.34로 COLLAPSE_SUPPORT_RATIO
-  // (0.42) 밑으로 내려가고(그만큼 큰 실수는 첫수부터 바로 COLLAPSE 가능), 이미 치우친
-  // 스택 기준으로는 완전히 빗나가는(overlap 0) 경우까지 나온다.
+  INITIAL_STACK_WIDTH_RATIO: 0.36,  // 모든 재료가 공유하는 고정 폭 = LOGICAL_WIDTH * 이 값. 이 폭은 게임 내내 변하지 않는다.
+  // 0.70 → 0.56 → 0.50 → 0.42로 줄여왔는데 "좌우로 움직이는 폭이 더 넓었으면" 피드백이
+  // 또 있어 0.36까지 더 줄였다(2026-10-01). margin 4 기준 travel/W ≈ 1.72로 더 늘어난다
+  // (기존 1.33 대비). 정중앙 스택 기준 첫수를 극단으로 몰면 supportRatio가 더 쉽게
+  // COLLAPSE_SUPPORT_RATIO 밑으로 내려가므로, 좌우 폭이 넓어진 만큼 손 떨림 하나의
+  // 리스크도 함께 커진다(의도된 트레이드오프).
 
   BASE_SPEED: 110,                  // 1~5층 재료 이동 속도 기준값 (logical px/s)
 
@@ -20,11 +20,25 @@ BS.CONFIG = {
   // "많이 빨라져야 한다" + "빨라졌다 느려졌다 반복" 피드백 반영). 재료가 "스폰되는
   // 순간"에만 적용되고, 그 재료가 움직이는 동안에는(낙하 전까지) 절대 바뀌지 않는다
   // (spawnNext()에서 한 번만 계산해 current.speed에 고정). SPEED_MULT_CAP이 절대 상한.
-  SPEED_BASE_MULT: 1.00,             // 1층에서의 기준선 배율
-  SPEED_STEP_PER_LAYER: 0.05,        // 층마다 기준선이 이만큼씩 증가(0.026 → 0.05로 상승폭 약 2배)
-  SPEED_MULT_CAP: 2.40,              // 절대 상한(기존 1.65 → 2.40, 체감상 "훨씬 빠르게")
-  SPEED_WAVE_PERIOD_LAYERS: 6,       // 이 층수 주기로 한 번씩 빨라졌다 느려졌다를 반복(사인파)
-  SPEED_WAVE_AMPLITUDE: 0.30,        // 기준선 대비 ±30% 진폭(피크=baseline×1.3, 저점=baseline×0.7)
+  // "맨 첫 1~3층은 정상 속도로 유지해달라"는 피드백으로(2026-10-01) 1~3층은 아래
+  // 파동 계산을 아예 적용하지 않고 BASE_SPEED 그대로 둔다. 4층부터 파동이 시작된다.
+  SPEED_NORMAL_LAYERS: 3,             // 이 층수까지는 무조건 SPEED_BASE_MULT(정상 속도) 고정
+  SPEED_BASE_MULT: 1.00,              // 기준선 시작 배율(1~3층 고정 속도이기도 함)
+  SPEED_STEP_PER_LAYER: 0.05,         // 파동 활성화 후 층마다 기준선이 이만큼씩 증가(0.026 → 0.05로 상승폭 약 2배)
+  SPEED_MULT_CAP: 3.20,               // 절대 상한(1.65 → 2.40 → 2.80 → 3.20, 피크 진폭을 키운 만큼 더 일찍 안 잘리게 함께 올림)
+  // 파동을 "오르막 1/4주기 → 정점 유지(HOLD) → 내리막 1/4주기 → 저점 통과 1/4주기 →
+  // 복귀 1/4주기"의 5구간으로 쪼갰다(2026-10-01, 순수 사인파 폐기). "느린 건 지금
+  // 단계가 좋은데 빠른 건 좀 더 오래 유지됐으면"이라는 피드백 반영 — 내리막/저점/복귀
+  // 3구간(사용자가 "좋다"고 한 부분)은 기존 사인 모양 그대로 두고, 오르막 직후에만
+  // HOLD 구간을 끼워 넣어 "빠른 상태"가 더 오래 지속되게 했다.
+  SPEED_WAVE_QUARTER_LAYERS: 4,       // 오르막/내리막/저점통과/복귀 각 구간의 길이(층수) — 기존 반주기 8층(=4+4)과 동일 촘촘함 유지
+  SPEED_WAVE_HOLD_LAYERS: 6,          // 정점 도달 직후 이만큼 더 "빠른 상태"를 유지(신설)
+  // 한 사이클 총 길이 = QUARTER*4 + HOLD = 4*4+6 = 22층.
+  // "느린 건 지금 속도가 좋은데 빠른 건 더 빨라도 될 것 같다"는 피드백으로 진폭을
+  // 비대칭으로 바꿨다(2026-10-01) — 저점 쪽은 기존 0.50 그대로 유지(느린 느낌 보존),
+  // 오르막·HOLD·내리막 전반부(정점 쪽)는 1.00으로 키웠다(baseline의 최대 2배까지).
+  SPEED_WAVE_AMPLITUDE_DOWN: 0.50,   // 저점 쪽 진폭(기준선 대비, 저점=baseline×(1-0.50)=baseline×0.5) — 변경 없음
+  SPEED_WAVE_AMPLITUDE_UP: 1.00,     // 정점 쪽 진폭(기준선 대비, 정점=baseline×(1+1.00)=baseline×2.0) — 0.50→1.00 확대
 
   // 15층부터는 재료가 스폰될 때(그 재료가 움직이기 시작하기 전에 딱 한 번) 현재 단계
   // 배율에 무작위 편차(0.9~1.1배)를 살짝 곱한다. 스폰 이후 그 재료가 다 떨어질 때까지는
@@ -126,6 +140,14 @@ BS.CONFIG = {
   PLAY_TOP_PADDING: 14,             // 화면 최상단 → HUD 텍스트까지 여백
   HUD_HEIGHT: 30,                   // HUD 한 줄이 차지하는 높이
   HUD_TO_GAME_GAP: 10,              // HUD 아래 → 실제 게임 영역(스폰 라인 등) 사이 여백
+
+  // 계정 워터마크(2026-10-01 신설) — 메인/플레이 화면(캔버스)과 저장 이미지가 공유하는 값.
+  // 메인 화면(인트로)의 DOM 워터마크는 main.css의 .watermark에 같은 값을 직접 지정한다
+  // (CSS가 이 JS 상수를 읽을 수 없어서 별도 지정 — 수치만 여기와 동일하게 맞춘다).
+  WATERMARK_TEXT: '@ccojik.dh',
+  WATERMARK_FONT_SIZE: 11,          // 캔버스 전용 logical px(화면 폭 기준 스케일되어 DOM 12px과 비슷한 체감 크기)
+  WATERMARK_OPACITY: 0.42,          // 0.35~0.55 권장 범위 중간값(너무 흐리지도 진하지도 않게)
+  WATERMARK_PADDING: 16,            // 가장자리 안전 여백(logical px) — PLAY_FLOOR_PADDING과 동일한 감각
 };
 
 function tierLookup(tiers, layerIndex, key) {
@@ -135,14 +157,45 @@ function tierLookup(tiers, layerIndex, key) {
   return tiers[tiers.length - 1][key];
 }
 
-/* 층마다 훨씬 많이 빨라지는 상승 기준선 × 몇 층 주기로 빨라졌다/느려졌다 반복하는
- * 파동(sin) = speed multiplier (난이도 1, 2026-10-01 개정). 기준선 자체가 계속 오르므로
- * 파동의 저점·고점도 함께 높아진다 — "주기적으로 완급은 있지만 전체적으로는 점점 빨라짐". */
+/* 1~SPEED_NORMAL_LAYERS층까지는 무조건 정상 속도(1.00배) 고정. 그 다음부터
+ * "오르막(가속) → 정점 HOLD(빠른 상태 유지) → 내리막 → 저점 통과 → 복귀"
+ * 5구간을 돌며, 구간이 끝날 때마다 다음 구간으로 넘어가는 비(非)사인 파동에
+ * 층마다 오르는 기준선(baseline)을 곱한다(난이도 1, 2026-10-01 개정).
+ * 기준선 자체가 계속 오르므로 파동의 저점·고점도 함께 높아진다 — "완급은
+ * 반복되지만 전체적으로는 점점 빨라짐". 오르막·HOLD·내리막 전반부(정점 쪽)는
+ * AMPLITUDE_UP, 내리막 후반부·저점·복귀(저점 쪽)는 AMPLITUDE_DOWN을 써서
+ * "느린 느낌은 유지하되 빠른 쪽만 더 오래/더 빠르게" 비대칭으로 만든다. */
+function speedWaveAt(e) {
+  var C = BS.CONFIG;
+  var Q = C.SPEED_WAVE_QUARTER_LAYERS, H = C.SPEED_WAVE_HOLD_LAYERS;
+  var cycleLen = 4 * Q + H;
+  var pos = (e - 1) % cycleLen; // 0 = 주기 시작(=중립, wave 1.0)
+  var angleDeg, amplitude;
+  if (pos < Q) { // 오르막: 0deg(중립) → 90deg(정점)
+    angleDeg = (pos / Q) * 90;
+    amplitude = C.SPEED_WAVE_AMPLITUDE_UP;
+  } else if (pos < Q + H) { // 정점 HOLD: 90deg 고정
+    angleDeg = 90;
+    amplitude = C.SPEED_WAVE_AMPLITUDE_UP;
+  } else if (pos < 2 * Q + H) { // 내리막 전반부: 90deg → 180deg(중립)
+    angleDeg = 90 + ((pos - Q - H) / Q) * 90;
+    amplitude = C.SPEED_WAVE_AMPLITUDE_UP;
+  } else if (pos < 3 * Q + H) { // 내리막 후반부: 180deg(중립) → 270deg(저점)
+    angleDeg = 180 + ((pos - 2 * Q - H) / Q) * 90;
+    amplitude = C.SPEED_WAVE_AMPLITUDE_DOWN;
+  } else { // 복귀: 270deg(저점) → 360deg(중립, 다음 주기 시작)
+    angleDeg = 270 + ((pos - 3 * Q - H) / Q) * 90;
+    amplitude = C.SPEED_WAVE_AMPLITUDE_DOWN;
+  }
+  return 1 + amplitude * Math.sin(angleDeg * Math.PI / 180);
+}
+
 BS.speedMultiplierForLayer = function (layerIndex) {
   var C = BS.CONFIG;
-  var baseline = C.SPEED_BASE_MULT + (layerIndex - 1) * C.SPEED_STEP_PER_LAYER;
-  var wave = 1 + C.SPEED_WAVE_AMPLITUDE * Math.sin(2 * Math.PI * (layerIndex - 1) / C.SPEED_WAVE_PERIOD_LAYERS);
-  var mult = baseline * wave;
+  if (layerIndex <= C.SPEED_NORMAL_LAYERS) return C.SPEED_BASE_MULT;
+  var e = layerIndex - C.SPEED_NORMAL_LAYERS; // 파동 활성화 후 경과 층수(1부터 시작)
+  var baseline = C.SPEED_BASE_MULT + (e - 1) * C.SPEED_STEP_PER_LAYER;
+  var mult = baseline * speedWaveAt(e);
   return Math.min(mult, C.SPEED_MULT_CAP);
 };
 

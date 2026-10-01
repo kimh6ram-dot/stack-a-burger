@@ -47,11 +47,12 @@ COLLAPSE가 뜨면 스택이 실제로 무너지는 연출 후 게임 오버.
 
 ### INTRO 화면
 
-- 작은 라벨: `햄버거 쌓기`
-- 메인 제목: `안 무너지게\n쌓으세요`
+- 메인 제목: `안 무너지게\n쌓으세요`(작은 라벨 `햄버거 쌓기`는 2026-10-01 피드백으로
+  제거 — 제목 카피만 남긴다)
 - 비주얼: 완성된 햄버거 1개(bottom_bun·patty·cheese·lettuce·tomato·top_bun를 실제
   접촉 규칙 그대로 쌓은 정적 프리뷰, `src/main.js`의 `drawIntroPreview()`가 그린다)
 - CTA: `시작하기`
+- 좌상단에 계정 워터마크(§21 참고)
 
 ---
 
@@ -139,35 +140,41 @@ CSS/SVG/Canvas 도형으로 새로 그리지 않는다. (v1과 동일, 변경 �
 **재료 폭은 모든 재료·모든 상황에서 고정이다.**
 
 ```
-W = LOGICAL_WIDTH(375) * INITIAL_STACK_WIDTH_RATIO(0.56) ≈ 210px
+W = LOGICAL_WIDTH(375) * INITIAL_STACK_WIDTH_RATIO(0.36) = 135px
 ```
 
 v1에는 있던 "초기 폭의 65~75% 범위 안에서 튜닝"이라는 표현은 유지하되, 이제는
 **게임 시작부터 끝까지 이 폭 그대로**다. overlap 결과에 따라 줄어드는 일은
 없다(§7, §15).
 
-### 좌우 이동 범위 (2026-09-29 재수정 — §7의 안정성 판정이 실제로 의미가 있으려면 필수)
+### 좌우 이동 범위 (0.70 → 0.56 → 0.50 → 0.42 → 0.36, 2026-10-01 최신 — §7의 안정성
+### 판정이 실제로 의미가 있으려면 필수 + "좌우 폭을 더 넓게" 피드백)
 
 처음 폭 비율을 0.70으로 뒀을 때는 재료가 stage 폭의 70%를 차지해 좌우로
 움직일 수 있는 여유(travel)가 재료 폭의 30%뿐이었다. 그 결과 **아무리
 가장자리로 몰아 쌓아도 supportRatio가 0.69 밑으로 내려가지 않아 물리적으로
-COLLAPSE에 도달할 수 없었다** — 게임이 안 무너지던 정확한 원인이다.
+COLLAPSE에 도달할 수 없었다** — 게임이 안 무너지던 정확한 원인이다. 이후
+여러 차례(0.56→0.50→0.42) 더 줄였는데도 "좌우로 움직이는 폭이 더 넓었으면"
+피드백이 다시 있어 0.36까지 더 줄였다.
 
 ```js
 GAME_LEFT = 0,  GAME_RIGHT = LOGICAL_WIDTH(375)   // stage 기준, 스택 위치와 무관하게 고정
-SPAWN_MIN_X = PLAY_MARGIN(6)
-SPAWN_MAX_X = LOGICAL_WIDTH - PLAY_MARGIN - W
-travel = SPAWN_MAX_X - SPAWN_MIN_X ≈ 153px       // ≈ W의 73%
+SPAWN_MIN_X = PLAY_MARGIN(4)
+SPAWN_MAX_X = LOGICAL_WIDTH - PLAY_MARGIN - W      // 375 - 4 - 135 = 236
+travel = SPAWN_MAX_X - SPAWN_MIN_X = 232px         // W의 약 172%(travel/W ≈ 1.72)
 ```
 
 `MOVE_MIN_X`/`MOVE_MAX_X`는 **stage 좌표계에 고정**하고, 현재 스택의 위치나
 폭으로 좁히지 않는다(§4 요청 그대로 — 스택이 어디에 있든 반대쪽/바깥쪽에
-놓을 수 있어야 한다). 이 travel/W 비율(0.56 + margin 6)로:
+놓을 수 있어야 한다). 이 travel/W 비율(0.36 + margin 4 ≈ 1.72)로:
 
-- 이미 한쪽으로 치우친 스택 기준 반대 극단으로 놓으면 supportRatio가 약
-  0.27까지 내려가 `COLLAPSE_SUPPORT_RATIO`(0.42)를 실제로 넘는다.
-- 정중앙 스택 기준 첫 이동만으로는 약 0.64로 여전히 안전권이다(의도적 —
-  첫수부터 바로 위험해지진 않는다).
+- 이미 한쪽으로 치우친 스택 기준 반대 극단으로 놓으면 overlap이 아예 없는
+  경우(supportRatio 음수)까지 나온다 — `COLLAPSE_SUPPORT_RATIO`(0.42)를
+  확실히 넘는다.
+- 정중앙 스택 기준 첫 이동만으로도 극단까지 몰면 supportRatio 약 0.141로
+  이미 `COLLAPSE_SUPPORT_RATIO` 아래다 — 좌우 폭이 넓어진 만큼 **극단적인
+  첫수 한 번만으로도 1층에서 즉시 COLLAPSE가 날 수 있다**(의도된 트레이드오프:
+  폭을 넓힌 만큼 손 떨림 하나의 리스크도 커진다. 실측 §19 참고).
 
 ---
 
@@ -574,23 +581,53 @@ PERFECT 판정: 새 재료 중심과 바로 아래 재료 중심의 차이가 `P
 
 ---
 
-## 13. 속도 · 카메라 (난이도 1 — 2026-09-29 개정)
+## 13. 속도 · 카메라 (난이도 1 — 2026-10-01 재개정: 상승 기준선 × 반복 파동)
 
-층수 구간별 speed multiplier 표(`CONFIG.SPEED_TIERS`). 1.65배가 절대 상한
-(`SPEED_MULT_CAP`)이며 그 이상 빨라지지 않는다.
+층수 구간별 5층 단위 계단(`SPEED_TIERS`) 방식은 폐기했다. 지금은 **1~3층은
+무조건 정상 속도 고정, 4층부터 층마다 오르는 기준선(baseline) 위에
+"오르막 → 정점 HOLD → 내리막 → 저점 통과 → 복귀" 5구간 파동을 곱하는**
+구조다(`BS.speedMultiplierForLayer`/`speedWaveAt`, `config.js`). "층수가
+오를수록 계속 조금씩 빨라지기만 한다"는 너무 밋밋하다 → "속도 편차가 더
+컸으면" → "이랬다 저랬다 하지 말고 점점 빨라졌다가 점점 느려졌다가" →
+"단계를 더 쪼개달라, 느린 건 그대로 빠른 건 더 빨라도 된다" → "빠른 상태가
+좀 더 오래 유지됐으면 좋겠다, 1~3층은 정상 속도로"까지 다섯 차례에 걸쳐
+반영했다.
 
-```text
-1~5층      speed × 1.00
-6~10층     speed × 1.12
-11~15층    speed × 1.25
-16~20층    speed × 1.40
-21~25층    speed × 1.55
-26층 이상  speed × 1.65 (상한, 고정)
+```js
+// 1~SPEED_NORMAL_LAYERS(3)층: 파동 없이 무조건 SPEED_BASE_MULT(1.00) 고정
+e        = layer - SPEED_NORMAL_LAYERS(3)              // 파동 활성화 후 경과 층수(4층부터 1)
+baseline = SPEED_BASE_MULT(1.00) + (e-1) * SPEED_STEP_PER_LAYER(0.05)
+// 한 주기 = QUARTER×4 + HOLD = 4×4+6 = 22층. 구간별 각도/진폭:
+//   오르막(0~90°, Q층)        : amplitude = AMPLITUDE_UP(1.00)
+//   정점 HOLD(90° 고정, H층)  : amplitude = AMPLITUDE_UP(1.00)
+//   내리막 전반(90°→180°, Q층): amplitude = AMPLITUDE_UP(1.00)
+//   내리막 후반(180°→270°,Q층): amplitude = AMPLITUDE_DOWN(0.50)
+//   복귀(270°→360°, Q층)      : amplitude = AMPLITUDE_DOWN(0.50)
+wave = 1 + amplitude * sin(angle)
+mult = min(baseline * wave, SPEED_MULT_CAP(3.20))
 ```
 
-배율은 **재료가 스폰되는 순간에만** 계산해 `current.speed`에 고정한다 —
-한 재료가 움직이는 도중에는 절대 바뀌지 않는다(헤드리스로 0.6초간 다중
-샘플링해 값이 하나로 고정됨을 확인, §19).
+- 1~3층(`SPEED_NORMAL_LAYERS`)은 파동 계산을 아예 타지 않고 `BASE_SPEED`
+  그대로다. 공교롭게도 파동의 시작점(4층, 중립=1.0배)도 같은 값이라 3→4층
+  전환이 끊김 없이 자연스럽다.
+- 기준선은 4층(e=1)에서 1.00배로 시작해 이후 층마다 0.05씩 오른다.
+- 파동은 순수 사인이 아니라 **오르막 직후에 HOLD 구간을 끼워 넣은 비대칭
+  파형**이다. 내리막·저점·복귀 3구간(사용자가 "이미 좋다"고 한 부분)은
+  기존 사인 모양을 그대로 두고, 오르막 전용이던 자리에만 `SPEED_WAVE_HOLD_
+  LAYERS`(6층)만큼 "정점 비율 유지" 구간을 추가해 빠른 상태가 훨씬 오래
+  지속된다 — 게다가 HOLD 동안에도 기준선이 계속 오르기 때문에 정점 "비율"은
+  고정이어도 실제 px/s는 HOLD 중에도 계속 더 빨라진다.
+- 진폭은 비대칭이다 — 정점 쪽(오르막·HOLD·내리막 전반) `SPEED_WAVE_
+  AMPLITUDE_UP`(1.00, 정점=baseline×2.0), 저점 쪽(내리막 후반·복귀)
+  `SPEED_WAVE_AMPLITUDE_DOWN`(0.50, 저점=baseline×0.5).
+- 실측 예(층→px/s): 1~4층 110(정상 고정) → 5층 160 → 8층 264(정점 도달)
+  → 8~14층 264~330(HOLD, 기준선 상승으로 계속 더 빨라짐) → 18층 187(중립
+  통과) → 22층 105(저점) → 26층 231(복귀 후 재가속) → 28층부터 상한(352) 도달.
+- 절대 상한 `SPEED_MULT_CAP`(3.20)은 넘지 않는다(피크 진폭을 키운 만큼
+  상한도 2.80→3.20으로 함께 올렸다. 2주기째 HOLD 구간부터 상한에 닿기 시작).
+- 배율은 **재료가 스폰되는 순간에만** 계산해 `current.speed`에 고정한다 —
+  한 재료가 움직이는 도중에는 절대 바뀌지 않는다(헤드리스로 0.6초간 다중
+  샘플링해 값이 하나로 고정됨을 확인, §19).
 
 **15층부터**: 재료가 스폰될 때 위 배율에 `SPEED_VARIANCE_MIN~MAX`(0.9~1.1배)
 무작위 편차를 한 번 더 곱한다(그 뒤 `SPEED_MULT_CAP`으로 다시 clamp). 이
@@ -684,8 +721,9 @@ HUD_TO_GAME_GAP  = 10px
 모든 수치는 `src/game/config.js`의 `BS.CONFIG`에 모여 있다. 주요 그룹:
 
 ```text
-크기/폭       LOGICAL_WIDTH, PLAY_MARGIN(6), INITIAL_STACK_WIDTH_RATIO(0.56)
-속도/난이도   BASE_SPEED, SPEED_TIERS, SPEED_MULT_CAP,
+크기/폭       LOGICAL_WIDTH, PLAY_MARGIN(4), INITIAL_STACK_WIDTH_RATIO(0.36)
+속도/난이도   BASE_SPEED, SPEED_NORMAL_LAYERS, SPEED_BASE_MULT/STEP_PER_LAYER/MULT_CAP,
+              SPEED_WAVE_QUARTER_LAYERS/HOLD_LAYERS, SPEED_WAVE_AMPLITUDE_UP/DOWN,
               SPEED_VARIANCE_START_LAYER/MIN/MAX, PERFECT_THRESHOLD_TIERS
 낙하 3단계    RELEASE_MS, RELEASE_SINK_PX, FALL_MS, LAND_IMPACT_MS, LANDING_SQUASH_PX
 접촉 배치     INGREDIENT_CONTACT{top,bottom}, CONTACT_OVERLAP_PX, INGREDIENT_EXTRA_OVERLAP
@@ -807,3 +845,129 @@ tools/qa-floor-resize.js`(바닥 기준선 리사이즈/줌 대응, 2026-10-01 �
 - [x] 컴팩트 HUD
 - [x] 320×568 포함 모바일 QA
 - [x] 기존 다른 프로젝트 변경 없음
+
+---
+
+## 21. 빵 얹기(수동 완성) 기능 — 2026-10-01 신설
+
+게임오버(COLLAPSE)와 완전히 별개로, 플레이어가 원하는 시점에 "여기까지 쌓은
+햄버거를 완성해서 저장"할 수 있는 보조 기능. 실패 연출이 아니라 **의도적으로
+완성하는** 기능이다.
+
+### 상태 흐름
+
+```
+PLAYING → (빵 얹기 버튼) → TOPPING(하강) → TOPPING-SETTLE(착지 임팩트) → COMPLETED
+```
+
+기존 `collapsing`/`gameover-wait`/`gameover`와 완전히 별도인 3개 상태
+(`topping`, `topping-settle`, `completed`)를 `play.js`에 추가했다(`BS.play.
+requestTopping()`). 기존 상태머신·RESULT 플로우는 전혀 건드리지 않았다.
+
+### 버튼 — "빵 얹기"
+
+- PLAY 화면 우하단 플로팅 pill 버튼(`#btn-topping`, `.topping-btn`). HUD(캔버스에
+  직접 그림)·메인 drop 조작(캔버스 전체 pointerdown)과 레이어가 분리된 별도
+  DOM 요소라 서로 가리거나 간섭하지 않는다.
+- 노출 조건: `state`가 playing/release/falling/settling 중 하나이고 `layerCount
+  >= 1`(bottom_bun만 있으면 숨김). 활성 조건: `state === 'playing'`일 때만
+  클릭 가능(낙하/정산 중엔 `disabled`로 흐려짐, 클릭 무시) — collapse 중엔
+  `state`가 playing이 아니므로 버튼이 아예 노출되지 않는다.
+
+### top_bun 배치
+
+모든 재료가 동일한 고정 폭 `W`를 공유하므로(§4), top_bun의 x는 **현재 최상단
+레이어의 x와 동일하게** 둔다 — 폭이 같아 자동으로 그 레이어 중심에 맞춰진다
+(별도 center 계산 불필요). 세로 위치는 기존 재료와 똑같이 `BS.landingTopY`
+(접촉 기준점 + `CONTACT_OVERLAP_PX`)로 계산해, top_bun과 바로 아래 재료
+사이에도 다른 재료쌍과 동일하게 뜬 공간이 없다(전용 overlap 보정값 불필요 —
+`top_bun`은 이미 `INGREDIENT_CONTACT` 표에 실측값이 있었다).
+
+### 연출
+
+스폰 라인에서 등장해 기존 낙하와 동일한 `FALL_MS` ease-in 곡선으로 착지
+위치까지 내려오고(`topping` 상태), 착지 후 기존 `LAND_IMPACT_MS`/
+`LANDING_SQUASH_PX` 압축-복귀 연출을 그대로 공유한다(`topping-settle` 상태 —
+렌더러의 `settlingTopIndex` 분기를 `topping-settle`도 타도록 확장). 새
+타이밍 상수를 만들지 않고 기존 값을 재사용해 "기존 착지감과 톤"을 그대로
+맞췄다. `topping`/`topping-settle`/`completed` 동안은 카메라(`cameraY`)를
+얼려 완성 장면이 갑자기 스크롤되지 않게 한다.
+
+### 완성 후 — 같은 판 재개 없음
+
+`requestTopping()` 호출 즉시 움직이던 `current`(미확정 조각)는 스택에 추가하지
+않고 버린다. `topping-settle` → `completed` 전환 시 top_bun을 `stack`에 영구
+push하지만 이후 `spawnNext()`를 호출하지 않으므로 새 조각이 생기지 않고,
+`drop()`은 `state !== 'playing'` 가드로 자연히 잠긴다(Space/클릭/터치 모두
+동일 가드를 공유하므로 별도 입력 잠금 코드가 필요 없었다).
+
+### COMPLETED 화면
+
+`#screen-completed` — 초기엔 화면 상단에 슬림하게 붙는 바로 만들었으나,
+"완성 팝업도 RESULT(GAME OVER)처럼 가운데 떴으면 좋겠다"는 피드백으로
+**RESULT와 동일한 뷰포트 정중앙 팝업**(`.completed-panel`, `.result-panel`과
+같은 absolute+translate(-50%,-50%) 패턴)으로 변경했다(2026-10-01). 반투명
+배경(`rgba(255,255,255,0.95)`)이라 뒤의 완성된 햄버거 캔버스가 비쳐 보인다.
+"완성했어요" 라벨 + "N층" 큰 제목 + `이미지 저장`(주 CTA) + `다시하기`/
+`메인으로`(보조 버튼). 현재 쌓은 형태를 이 화면에서 임의로 재배치하지
+않는다 — 플레이 결과 그대로 보여준다.
+
+### 이미지 저장 — 전용 export 캔버스(B안)
+
+`src/game/export.js`의 `BS.exportCompletedImage(stack, layerCount)`가
+**플레이 화면과 완전히 분리된** 1080×1920 offscreen canvas에 새로 그린다
+(뷰포트/카메라/HUD와 무관 — §16 "흔들리지 않는 고정 export layout").
+
+- 밝은 배경(#FAFAF8), 스택 전체를 감싸는 bbox를 계산해 **하나의 균일한
+  scale+translate**로 센터 배치(목표 영역: 가로 70%·세로 58%).
+  레이어 개별 재정렬은 하지 않는다 — 실제 x 위치, 약간 삐뚤어진 모양까지
+  그대로 유지(§17 금지 사항 그대로 준수: 자동 중앙정렬/형태 보정 없음).
+- 각 레이어를 실제 스프라이트(`BS.sprites.get`)로 다시 그린다(이미지 찌그러짐
+  없음, 원본 비율 유지).
+- 최소 텍스트: 버거 아래에 "N층 완성" 캡션 한 줄만(날짜·게임명·SCORE 등은
+  넣지 않음 — "잡다한 정보 없는 스크린샷" 원칙).
+- `canvas.toBlob()` → `<a download>` 트리거로 PNG 다운로드.
+  파일명 `burger-stack-YYYYMMDD-HHmmss.png`(`BS.exportFilename()`).
+- 저장 버튼은 클릭 즉시 `disabled` 처리 후 콜백에서 재활성화 — 연속 클릭으로
+  중복 다운로드가 발생하지 않는다.
+
+### 계정 워터마크 — `@ccojik.dh`(2026-10-01 신설, 2026-10-01 재배치)
+
+메인 화면·플레이 화면·저장 이미지 세 곳 모두에 작고 은은하게(`opacity 0.42`,
+`font-size` 11~12px대, `font-weight 500`) 넣는다. 처음엔 좌하단(플레이 화면)/
+우하단(메인·저장 이미지)으로 넣었다가, "맨 위 HUD 중 왼쪽 걸 가운데로 옮기고
+그 자리(맨 왼쪽)에 워터마크를 넣어달라"는 피드백으로 **플레이 화면 HUD 줄에
+통합**했다:
+
+```
+플레이 화면 HUD 한 줄 = [좌측] @ccojik.dh(워터마크) · [중앙] N층 · SCORE n · [우측] BEST n
+```
+
+기존에 좌측에 있던 "N층 · SCORE n"을 중앙 정렬로 옮기고, 비워진 좌측 자리에
+워터마크를 넣었다(`renderer.js`의 HUD 그리기 블록, `CONFIG.WATERMARK_*` 값
+재사용). 메인 화면(인트로)도 같은 좌상단 위치로 맞췄다(`.watermark` DOM,
+`left:16px; top:16px`). 저장 이미지는 이 피드백 범위 밖이라 기존 그대로
+**우하단**을 유지한다(§6 권장안). `CONFIG.WATERMARK_TEXT/FONT_SIZE/OPACITY/
+PADDING`에 값이 모여 있고, 캔버스(플레이·저장 이미지)는 이 상수를 그대로
+쓰고 DOM(메인 화면 CSS)은 같은 수치를 수동으로 맞춰뒀다(CSS가 JS 상수를
+읽을 수 없어서).
+
+### 예외 처리
+
+| 상황 | 처리 |
+|---|---|
+| collapse 중 빵 얹기 | `requestTopping()`이 `state!=='playing'`이면 즉시 return — 버튼도 애초에 숨겨짐 |
+| 낙하/정산 중 빵 얹기 | 위와 동일(해당 상태들도 playing이 아님). 버튼은 노출되지만 `disabled` |
+| 재료 0개(bottom_bun만)에서 빵 얹기 | `layerCount < 1`이면 return, 버튼도 숨김 |
+| completed 상태에서 재요청 | `state!=='playing'`이라 무시(top_bun 중복 추가 안 됨) |
+| 저장 버튼 연속 클릭 | `isSavingImage` 플래그 + 버튼 `disabled`로 방지 |
+
+### QA
+
+`tools/qa-topping.js` — 명세 §22 A~F에 해당하는 9개 시나리오(재료 1개 완성,
+삐뚤게 쌓은 뒤 완성 시 형태 보존, UNSTABLE 직전 완성 가능, collapse 중 완성
+불가, 재료 0개 완성 불가, 실제 PNG 다운로드까지 확인하는 저장 플로우, 저장
+연속 클릭 방지, completed 중복 실행 방지, 모바일 터치 환경, 기존 GAME OVER
+플로우 무회귀) 전체 통과(2026-10-01, playwright-core + 로컬 Chrome 헤드리스,
+`page.waitForEvent('download')`로 실제 다운로드 파일까지 저장해 0바이트가
+아님을 확인).

@@ -25,6 +25,7 @@ BS.play = (function () {
   var stageW = 0, stageH = 0;
   var hasEverDropped = false; // 페이지 로드 후 한 번이라도 drop했는지(재시작해도 유지 — 안내문구 재노출 방지)
   var unstableStreak = 0; // 연속 UNSTABLE 착지 횟수(버티다 지쳐 무너지는 판정용)
+  var topping = null; // "빵 얹기" 수동 완성 중인 top_bun. { ingredient, x, width, visualHeight, worldY, fallFromWorldY, fallToWorldY, phaseT, settleT }
 
   function ingredientWidth() { return BS.ingredientWidth(); }
   function visualHeightOf(id) { return BS.visualHeightOf(id); }
@@ -73,6 +74,7 @@ BS.play = (function () {
     stageW = w; stageH = h;
     stack = [];
     current = null;
+    topping = null;
     history = [];
     perfectFlashTimer = 0;
     wobble = null;
@@ -138,6 +140,31 @@ BS.play = (function () {
     current.releaseFromScreenY = current.screenY;
     current.releaseToScreenY = current.screenY + C.RELEASE_SINK_PX;
     state = 'release';
+  }
+
+  /* "빵 얹기" — 게임오버와 별개로, 플레이어가 원하는 시점에 현재 스택 위에 top_bun을
+   * 올려 수동으로 완성한다. playing 상태(= 낙하/정산/붕괴 중이 아님)이고 일반 재료가
+   * 1개 이상 쌓였을 때만 동작한다(bottom_bun만 있는 시작 상태는 제외). 움직이던
+   * current는 스택에 추가하지 않고 그냥 버린다(§5 "moving piece 제거"). */
+  function requestTopping() {
+    if (state !== 'playing' || !current) return;
+    if (layerCount < 1) return;
+    current = null;
+
+    var top = topLayer();
+    var W = ingredientWidth();
+    var vh = visualHeightOf('top_bun');
+    // top_bun은 모든 재료와 동일한 고정 폭 W를 공유하므로, 바로 아래 최상단 재료와
+    // 같은 x를 쓰면 폭이 같아 자동으로 그 재료 중심에 맞춰진다(별도 center 계산 불필요).
+    var startWorldY = BS.spawnScreenY() + cameraY; // 스폰 라인에서 등장(일반 재료와 동일 기준)
+    topping = {
+      ingredient: 'top_bun', x: top.x, width: W, visualHeight: vh,
+      fallFromWorldY: startWorldY,
+      fallToWorldY: landingWorldTopY(top, vh, 'top_bun'),
+      worldY: startWorldY,
+      phaseT: 0, settleT: 0
+    };
+    state = 'topping';
   }
 
   function beginFall() {
@@ -334,6 +361,27 @@ BS.play = (function () {
     } else if (state === 'gameover-wait') {
       gameoverTimer -= dt;
       if (gameoverTimer <= 0) state = 'gameover';
+    } else if (state === 'topping' && topping) {
+      topping.phaseT += dt;
+      var tpt = Math.min(1, topping.phaseT / (C.FALL_MS / 1000));
+      var tpe = tpt * tpt * tpt; // 일반 낙하와 동일한 ease-in — "기존 착지감과 톤 맞춤"
+      topping.worldY = topping.fallFromWorldY + (topping.fallToWorldY - topping.fallFromWorldY) * tpe;
+      if (tpt >= 1) {
+        stack.push({
+          ingredient: topping.ingredient, x: topping.x, width: topping.width, visualHeight: topping.visualHeight,
+          topY: topping.fallToWorldY, tier: 'safe', perfect: false,
+          collX: 0, collY: 0, collAngle: 0, collVX: 0, collVY: 0, collAngVel: 0,
+          collActive: false, collDetached: false, collDetachAt: 0, collHeightFactor: 1
+        });
+        topping.settleT = 0;
+        state = 'topping-settle';
+      }
+    } else if (state === 'topping-settle' && topping) {
+      topping.settleT += dt;
+      if (topping.settleT >= C.LAND_IMPACT_MS / 1000) {
+        topping = null;
+        state = 'completed';
+      }
     }
 
     if (perfectFlashTimer > 0) perfectFlashTimer = Math.max(0, perfectFlashTimer - dt);
@@ -343,11 +391,13 @@ BS.play = (function () {
       if (wobble.elapsed >= C.WOBBLE_DECAY_MS / 1000) wobble = null;
     }
 
-    if (state !== 'collapsing' && state !== 'gameover-wait' && state !== 'gameover') {
+    if (state !== 'collapsing' && state !== 'gameover-wait' && state !== 'gameover' &&
+        state !== 'topping' && state !== 'topping-settle' && state !== 'completed') {
       // 매 프레임 현재 stageH·스택 기준으로 다시 계산한다(이전 목표값에 대한 min() 래칫을
       // 걸지 않음) — 그래야 창 크기가 커져서 바닥 기준선이 "덜 제약적"으로 바뀌는 경우에도
       // 카메라가 다시 그쪽으로 자연스럽게 돌아올 수 있다. 일반적인 스택 성장만 있는
       // 동안에는(창 크기 변화 없음) 이 값이 단조 감소하므로 기존 동작과 동일하다.
+      // 빵 얹기(topping) 이후에는 완성 장면이 갑자기 스크롤되지 않도록 카메라를 고정한다.
       cameraTargetY = computeCameraTarget();
     }
     cameraY += (cameraTargetY - cameraY) * C.STACK_SCROLL_EASE;
@@ -361,7 +411,7 @@ BS.play = (function () {
 
   function getSnapshotState() {
     return {
-      state: state, stack: stack, current: current,
+      state: state, stack: stack, current: current, topping: topping,
       cameraY: cameraY, layerCount: layerCount, score: score, perfectCount: perfectCount,
       best: best, perfectFlashTimer: perfectFlashTimer,
       wobbleAngle: getWobbleAngle(),
@@ -372,6 +422,7 @@ BS.play = (function () {
 
   return {
     reset: reset, update: update, drop: drop, updateStageSize: updateStageSize,
+    requestTopping: requestTopping,
     getSnapshotState: getSnapshotState
   };
 })();
