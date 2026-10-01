@@ -1,0 +1,140 @@
+:root {
+  --bg: #FFFFFF;
+  --text: #000000;
+  --muted: #777777;
+  --border: #000000;
+
+  --app-max-width: 430px;
+  --content-width: 320px;
+  --button-height: 48px;
+
+  --screen-bottom: 28px;
+  --gap-title-content: 20px;
+  --gap-content-cta: 28px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+body {
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.app {
+  position: relative;
+  width: 100%;
+  max-width: var(--app-max-width);
+  height: 100vh;
+  height: 100dvh;
+  background: #fff;
+  overflow: hidden;
+}
+#stage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* INTRO / RESULT — MINIGAME_SYSTEM §37 "보여주는 화면" 리듬(1:2 스페이서로 정중앙보다 살짝 위) */
+.screen {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 16px;
+}
+.screen[hidden] { display: none; }
+.screen::before { content: ""; flex: 1 0 0; }
+.screen::after { content: ""; flex: 2 0 0; }
+
+.screen-inner {
+  width: 100%;
+  max-width: var(--content-width);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* RESULT는 전체를 흰 배경으로 덮지 않는다 — 무너진 최종 상태가 결과의 일부로 보여야 한다(뒤에 캔버스 그대로 노출).
+ * 팝업은 하단 고정이 아니라 뷰포트 정중앙(가로+세로)에 뜬다. */
+#screen-result {
+  background: transparent;
+  padding: 0;
+}
+#screen-result:not([hidden]) {
+  display: block; /* 부모의 column/1:2 스페이서 flex 레이아웃을 쓰지 않는다. [hidden]일 때는 .screen[hidden]의 display:none이 우선해야 하므로 여기서만 적용 */
+}
+#screen-result::before, #screen-result::after { content: none; }
+.result-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 32px);
+  max-width: var(--content-width);
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--border);
+  padding: 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+#intro-preview {
+  width: 150px;
+  height: 180px;
+  margin-bottom: 18px;
+}
+
+.game-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+.game-title {
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
+  white-space: pre-line;
+}
+
+.result-stats {
+  margin-top: var(--gap-title-content);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.result-stats b { color: var(--text); font-weight: 800; }
+
+.cta {
+  margin-top: var(--gap-content-cta);
+  width: 100%;
+  height: var(--button-height);
+  border: 1px solid var(--border);
+  background: #000;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 700;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.cta:active { opacity: 0.85; }
