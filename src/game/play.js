@@ -18,6 +18,11 @@ BS.play = (function () {
   var stackAngularVelocity = 0;   // rad/s
   var stackTargetTilt = 0;        // 이번 프레임 COM 기준 목표 기울기(rad, 디버그/참고용으로도 노출)
   var swayCollapseTimer = 0;      // ms. 흔들림만으로 유효 COM이 COLLAPSE 영역에 머문 누적 시간
+  var pendingSwayImpulse = null;  // { impulse, perfect } — 착지 프레임엔 바로 적용하지 않고 다음
+                                   // 프레임에 적용한다(2026-10-02 버그 수정, 아래 finalizeDrop 참고)
+  var swayFreezeThisFrame = false; // 착지로 새 레이어가 막 stack에 들어간 바로 그 프레임엔 target
+                                   // 재계산/스프링 적분을 건너뛴다 — 안 그러면 새 레이어가 COM
+                                   // 평균에 끼어들어 같은 프레임 안에서 또 한 번 미세하게 튄다
   var collapseDir = 1;
   var collapseElapsed = 0;
   var gameoverTimer = 0;
@@ -47,7 +52,11 @@ BS.play = (function () {
     return -(layer.topY + layer.visualHeight); // 월드 y=0이 바닥, 위로 갈수록 음수이므로 부호 반전
   }
   function swayOffsetForHeight(heightAboveBase) {
-    return heightAboveBase * Math.tan(stackTilt) * C.TILT_COM_FACTOR;
+    var raw = heightAboveBase * Math.tan(stackTilt) * C.TILT_COM_FACTOR;
+    // 각도는 상한이 있어도 height는 층수에 비례해 무한히 커지므로, 둘의 곱(shearPx) 자체에
+    // 별도 상한을 둔다(2026-10-02 버그 수정 — 안 그러면 고층에서 수백 px까지 치솟는다).
+    var cap = ingredientWidth() * C.MAX_SWAY_SHEAR_RATIO;
+    return Math.max(-cap, Math.min(cap, raw));
   }
   /* 현재 stackTilt를 반영한 "지금 화면에 실제로 보이는" x로 치환한 스택 스냅샷.
    * 착지 판정(finalizeDrop)과 흔들림 자체의 위험도 체크(evaluateExistingStability) 둘 다
@@ -126,7 +135,7 @@ BS.play = (function () {
     topping = null;
     history = [];
     perfectFlashTimer = 0;
-    stackTilt = 0; stackAngularVelocity = 0; stackTargetTilt = 0; swayCollapseTimer = 0;
+    stackTilt = 0; stackAngularVelocity = 0; stackTargetTilt = 0; swayCollapseTimer = 0; pendingSwayImpulse = null; swayFreezeThisFrame = false;
     unstableStreak = 0;
     layerCount = 0; score = 0; perfectCount = 0;
     best = readBest();
@@ -176,7 +185,13 @@ BS.play = (function () {
       ingredient: id, x: startX, width: W, visualHeight: vh,
       direction: dir, speed: speed,
       screenY: sy, renderScreenY: sy,
-      phaseT: 0
+      phaseT: 0,
+      // 착지할 세로 위치는 가로로 어디에 놓일지와 무관하게 "바로 아래 재료가 무엇인가"만으로
+      // 정해지므로 스폰 시점에 미리 계산해둔다. 렌더러가 이 값으로 "이 재료가 결국 위치할
+      // 높이"를 미리 알고 흔들림(sway) shear를 스폰 때부터 착지 이후까지 끊김 없이 같은
+      // 공식으로 적용한다 — 안 그러면 착지 순간 흔들림 보정이 갑자기 끼어들어 "다른 곳에
+      // 붙는" 것처럼 보이는 버그가 생긴다(2026-10-02 수정).
+      fallToWorldY: landingWorldTopY(topLayer(), vh, id)
     };
     state = 'playing';
   }
@@ -188,6 +203,8 @@ BS.play = (function () {
     current.phaseT = 0;
     current.releaseFromScreenY = current.screenY;
     current.releaseToScreenY = current.screenY + C.RELEASE_SINK_PX;
+    current.dropStartX = current.x; // 디버그/검증용 — 이 값이 이후 끝까지 그대로인지 추적한다
+    if (BS.DEBUG_LANDING_LOG) console.log('[DROP] dropStartX=' + current.x.toFixed(3) + ' layer#' + (layerCount + 1));
     state = 'release';
   }
 
@@ -217,16 +234,18 @@ BS.play = (function () {
   }
 
   function beginFall() {
-    var top = topLayer();
+    // fallToWorldY는 spawnNext()에서 이미 계산해뒀다(재사용 — topLayer()는 그 사이 바뀌지
+    // 않으므로 다시 계산해도 같은 값이지만, 흔들림 shear가 스폰 시점부터 이 값을 참조하므로
+    // 여기서 다시 계산하지 않고 그대로 쓴다).
     var camAtRelease = cameraY;
     current.fallFromWorldY = current.releaseToScreenY + camAtRelease;
-    current.fallToWorldY = landingWorldTopY(top, current.visualHeight, current.ingredient);
     current.worldY = current.fallFromWorldY;
     current.phaseT = 0;
     state = 'falling';
   }
 
   function finalizeDrop() {
+    if (BS.DEBUG_LANDING_LOG) console.log('[CONTACT] contactX=' + current.x.toFixed(3) + ' (dropStartX=' + (current.dropStartX !== undefined ? current.dropStartX.toFixed(3) : '?') + ')');
     // 지지 판정은 "정지 좌표"가 아니라 "지금 실제로 보이는(흔들린) 위치" 기준이어야 한다(§12~13).
     var shearedExisting = shearedStackSnapshot();
     var shearedTop = shearedExisting[shearedExisting.length - 1];
@@ -259,24 +278,29 @@ BS.play = (function () {
       collVX: 0, collVY: 0, collAngVel: 0, collActive: false, collDetached: false,
       collDetachAt: 0, collHeightFactor: 1
     };
+    if (BS.DEBUG_LANDING_LOG) console.log('[SETTLE START] settleStartX=' + newLayer.x.toFixed(3));
     stack.push(newLayer);
+    if (BS.DEBUG_LANDING_LOG) console.log('[STACK INSERT] insertX=' + stack[stack.length - 1].x.toFixed(3) + ' (stack.length=' + stack.length + ')');
     layerCount += 1;
     score += 1;
     if (perfect) { score += 1; perfectCount += 1; perfectFlashTimer = C.PERFECT_FLASH_MS / 1000; }
 
     // 착지 balance impulse(§9) — 보이는 지지면 중심 대비 어느 쪽에 놓였는지로 즉각적인 "휘청"을
     // 만든다. PERFECT는 보상으로 impulse를 크게 줄이고 기존 흔들림도 살짝 가라앉힌다(§10).
+    // 2026-10-02 버그 수정: 이 impulse를 이 자리에서 바로 stackAngularVelocity/stackTilt에
+    // 반영하면, 착지와 "같은 프레임" 안에서 스프링 적분까지 한 번에 일어나 버려 고층(높이가
+    // 큰)에서는 착지 직후 화면 x가 순간적으로 몇~십몇 px 튀어 보였다(바로 아래 §12 shear
+    // 공식이 각도 변화를 높이만큼 증폭하기 때문). 그래서 다음 프레임에 적용되도록 미룬다 —
+    // 떨어지는 재료가 착지하는 순간 자체는 깨끗하게 보이고, 그 "휘청"은 착지 *직후* 반응으로
+    // 느껴진다(오히려 더 자연스럽다).
     var supportCenterX = shearedTop.x + shearedTop.width / 2;
     var landingOffset = (current.x + current.width / 2) - supportCenterX;
     var normalizedLandingOffset = landingOffset / (current.width / 2);
     var landingSensitivity = BS.balanceSensitivityForLayer(layerCount);
     var impulse = normalizedLandingOffset * C.LANDING_BALANCE_IMPULSE * landingSensitivity;
-    if (perfect) {
-      impulse *= (1 - C.PERFECT_BALANCE_DAMPING); // "매우 작게"
-      stackAngularVelocity *= C.PERFECT_BALANCE_DAMPING;
-      stackTilt *= C.PERFECT_BALANCE_DAMPING; // 중앙 방향으로 살짝 보정(완전 수직으로 만들진 않음)
-    }
-    stackAngularVelocity += impulse;
+    if (perfect) impulse *= (1 - C.PERFECT_BALANCE_DAMPING); // "매우 작게"
+    pendingSwayImpulse = { impulse: impulse, perfect: perfect };
+    swayFreezeThisFrame = true; // newLayer가 막 stack에 들어갔다 — 이번 프레임의 target 재계산은 건너뜀
 
     BS.audio.playThump(perfect ? 1 : (result.tier === 'safe' ? 0.85 : 0.6));
 
@@ -334,12 +358,27 @@ BS.play = (function () {
     // 이후로는 swayActive()가 false(collapsing)이므로 stackTilt가 더 갱신되지 않는다 — 여기서
     // 0으로 초기화하는 건 "다음 reset() 전까지 값을 남겨두지 않기" 위한 정리일 뿐, 이미 위에서
     // 그 값을 collX/pivot 계산에 다 반영한 뒤이므로 시각적 점프는 없다.
-    stackTilt = 0; stackAngularVelocity = 0; stackTargetTilt = 0; swayCollapseTimer = 0;
+    stackTilt = 0; stackAngularVelocity = 0; stackTargetTilt = 0; swayCollapseTimer = 0; pendingSwayImpulse = null; swayFreezeThisFrame = false;
     state = 'collapsing';
   }
 
   function update(dt) {
     dt = Math.min(dt, 0.05);
+
+    // 지난 프레임에 착지하며 예약해둔 흔들림 impulse를 이번 프레임 시작 시점에 반영한다
+    // (finalizeDrop 주석 참고 — 착지 프레임 자체는 깨끗하게 보이게 하기 위한 1프레임 지연).
+    if (pendingSwayImpulse) {
+      if (pendingSwayImpulse.perfect) {
+        stackAngularVelocity *= C.PERFECT_BALANCE_DAMPING;
+        stackTilt *= C.PERFECT_BALANCE_DAMPING;
+      }
+      stackAngularVelocity += pendingSwayImpulse.impulse;
+      pendingSwayImpulse = null;
+      if (BS.DEBUG_LANDING_LOG && stack.length) {
+        var afterBalanceLayer = stack[stack.length - 1];
+        console.log('[AFTER BALANCE] finalX=' + afterBalanceLayer.x.toFixed(3) + ' (baseX never touched by balance — only stackTilt/renderX changed)');
+      }
+    }
 
     if (state === 'playing' && current) {
       current.x += current.direction * current.speed * dt;
@@ -456,13 +495,25 @@ BS.play = (function () {
     if (perfectFlashTimer > 0) perfectFlashTimer = Math.max(0, perfectFlashTimer - dt);
 
     if (swayActive()) {
-      // 스프링-댐퍼로 목표 기울기를 관성 있게 쫓는다(§7) — 단순히 target으로 바로 이동하지 않음.
-      // settling(착지 임팩트) 중에도 계속 갱신한다 — 착지 impulse가 바로 이 구간에서 느껴져야 함.
-      stackTargetTilt = computeTargetTilt();
-      var angularAccel = (stackTargetTilt - stackTilt) * C.BALANCE_SPRING;
-      stackAngularVelocity += angularAccel * dt;
-      stackAngularVelocity *= Math.pow(C.BALANCE_DAMPING, dt); // 초당 유지비율 → 프레임레이트 무관 감쇠
-      stackTilt += stackAngularVelocity * dt;
+      if (swayFreezeThisFrame) {
+        // 이번 프레임에 막 착지한 레이어가 stack에 들어갔다 — COM이 그 레이어를 포함해 바로
+        // 바뀌므로, 지금 target을 다시 계산하면 "착지 프레임 자체"에서 또 한 번 미세하게
+        // 튄다(2026-10-02 버그 수정). 이번 프레임만 건너뛰고 다음 프레임부터 정상 재개한다.
+        swayFreezeThisFrame = false;
+      } else {
+        // 스프링-댐퍼로 목표 기울기를 관성 있게 쫓는다(§7) — 단순히 target으로 바로 이동하지 않음.
+        // settling(착지 임팩트) 중에도 계속 갱신한다 — 착지 impulse가 바로 이 구간에서 느껴져야 함.
+        stackTargetTilt = computeTargetTilt();
+        var angularAccel = (stackTargetTilt - stackTilt) * C.BALANCE_SPRING;
+        stackAngularVelocity += angularAccel * dt;
+        stackAngularVelocity *= Math.pow(C.BALANCE_DAMPING, dt); // 초당 유지비율 → 프레임레이트 무관 감쇠
+        stackTilt += stackAngularVelocity * dt;
+        // 스프링이 목표를 살짝 지나치는 건 정상(§7)이지만, 그래도 절대 상한은 넘지 않게 막는다
+        // (안전망 — 주된 수정은 shear 자체의 픽셀 상한, 위 swayOffsetForHeight 참고).
+        var maxTiltRad = C.MAX_NORMAL_TILT * Math.PI / 180;
+        if (stackTilt > maxTiltRad) { stackTilt = maxTiltRad; stackAngularVelocity = Math.min(stackAngularVelocity, 0); }
+        else if (stackTilt < -maxTiltRad) { stackTilt = -maxTiltRad; stackAngularVelocity = Math.max(stackAngularVelocity, 0); }
+      }
     }
 
     // 흔들림 자체가 위험해지는 상황(§16~18) — 새 재료 착지와 무관하게 매 프레임 감시한다.

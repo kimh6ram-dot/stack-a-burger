@@ -47,11 +47,18 @@ BS.renderer = (function () {
     // 반영해 이어받으므로(§15) 여기서 추가로 shear를 더하지 않는다(이중 적용 방지).
     var TILT_FACTOR = BS.CONFIG.TILT_COM_FACTOR;
     var tiltTan = Math.tan(snap.stackTilt || 0);
-    function shearXFor(layer) {
+    // shearPx 자체에 상한을 둔다 — 각도는 층수와 무관하게 상한이 있어도 height는 층수에
+    // 비례해 무한히 커지므로, 상한이 없으면 고층에서 shear가 수백 px까지 치솟는다(2026-10-02
+    // 버그 수정 — play.js의 swayOffsetForHeight와 반드시 같은 상한을 공유해야 "보이는 대로
+    // 판정"이 어긋나지 않는다).
+    var shearCap = BS.ingredientWidth() * BS.CONFIG.MAX_SWAY_SHEAR_RATIO;
+    function shearXForHeight(worldTopY, visualHeight) {
       if (isCollapsing) return 0;
-      var heightAboveBase = -(layer.topY + layer.visualHeight);
-      return heightAboveBase * tiltTan * TILT_FACTOR;
+      var heightAboveBase = -(worldTopY + visualHeight);
+      var raw = heightAboveBase * tiltTan * TILT_FACTOR;
+      return Math.max(-shearCap, Math.min(shearCap, raw));
     }
+    function shearXFor(layer) { return shearXForHeight(layer.topY, layer.visualHeight); }
     // topping-settle(빵 얹기 착지 임팩트)도 settling과 같은 압축/복귀 연출을 공유한다.
     var settlingTopIndex = (snap.state === 'settling' || snap.state === 'topping-settle') ? stack.length - 1 : -1;
 
@@ -82,13 +89,18 @@ BS.renderer = (function () {
     }
 
     if (!isCollapsing && (snap.state === 'playing' || snap.state === 'release' || snap.state === 'falling') && snap.current) {
+      // 스폰 시점부터 이미 "착지할 높이"(fallToWorldY)를 알고 있으므로, 떨어지는 동안에도
+      // 착지 후와 동일한 공식으로 shear를 적용한다 — 착지 순간 갑자기 다른 공식이 끼어들어
+      // "다른 곳에 붙는" 것처럼 보이던 문제(2026-10-02)를 이렇게 없앴다.
       var c = snap.current;
-      drawFull(c.ingredient, c.x, c.renderScreenY, c.width, c.visualHeight);
+      var cShear = shearXForHeight(c.fallToWorldY, c.visualHeight);
+      drawFull(c.ingredient, c.x + cShear, c.renderScreenY, c.width, c.visualHeight);
     }
 
     if (snap.state === 'topping' && snap.topping) {
       var tb = snap.topping;
-      drawFull(tb.ingredient, tb.x, tb.worldY - cam, tb.width, tb.visualHeight);
+      var tbShear = shearXForHeight(tb.fallToWorldY, tb.visualHeight);
+      drawFull(tb.ingredient, tb.x + tbShear, tb.worldY - cam, tb.width, tb.visualHeight);
     }
 
     if (snap.perfectFlashTimer > 0 && stack.length) {
