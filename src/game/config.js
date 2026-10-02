@@ -113,24 +113,78 @@ BS.CONFIG = {
   // UNSTABLE이 이만큼 쌓이면 "버티다 지쳐 무너지는" 것으로 처리해 강제로 COLLAPSE시킨다.
   UNSTABLE_STREAK_COLLAPSE: 5,
 
-  WOBBLE_MAX_ANGLE: 0.045,          // UNSTABLE 착지 시 스택 전체가 흔들리는 최대 각도(rad, 약 2.6도)
-  WOBBLE_DECAY_MS: 550,             // 흔들림이 잦아드는 시간
+  // 동적 균형/흔들림(2026-10-02 신설) — "착지 후 완전 정지"를 "중심을 잡으며 서 있는 탑"으로
+  // 바꾼다. 매 프레임 현재 무게중심(COM)으로부터 목표 기울기(stackTargetTilt)를 계산하고,
+  // 스프링-댐퍼로 실제 기울기(stackTilt)가 그 목표를 향해 관성 있게 움직인다. 단순 랜덤 흔들림이
+  // 아니라 실제 COM·지지 구간 판정에도 반영된다(play.js의 shearedStackSnapshot 참고). 이전의
+  // WOBBLE_MAX_ANGLE/WOBBLE_DECAY_MS(착지 직후 짧게만 흔들리는 단순 연출)는 이 시스템으로
+  // 완전히 대체해 제거했다.
+  BALANCE_SENSITIVITY_BY_LAYER: [
+    { maxLayer: 3, value: 0.45 },
+    { maxLayer: 6, value: 0.70 },
+    { maxLayer: 9, value: 1.05 },
+    { maxLayer: 12, value: 1.45 },
+    { maxLayer: 15, value: 1.80 },
+    { maxLayer: Infinity, value: 2.10 },
+  ],
+  // normalizedOffset(COM이 바닥 중심에서 벗어난 비율, -1~1)이 같아도 층수가 높을수록 훨씬
+  // 민감하게 기운다 — "초반엔 거의 안정, 10층부터 확실히 빡빡해짐"의 핵심 수치.
+  // 2.3 → 8.0(§19 실측 후 1차 보정) → 11.0(2026-10-02, "탑이 무너지듯 옆으로 넘어가는" 느낌을
+  // 더 달라는 피드백으로 2차 보정) — 평소 흔들림 자체가 "이러다 진짜 넘어가겠다" 싶을 만큼
+  // 눈에 띄게 기울도록 더 키웠다.
+  BALANCE_TILT_BASE_DEG: 11.0,       // normalizedOffset=1·sensitivity=1일 때의 기준 각도(목표
+                                     // 기울기 공식의 단위 스케일 — §5 sensitivity 표를 §6의
+                                     // 층수별 목표 tilt 범위에 맞게 변환하는 보정 상수)
+  // 2026-10-02: "탑이 무너지듯이" 피드백으로 층수별 상한도 전반적으로 올렸다(기존 0.5/1.2/2.0/
+  // 3.5/4.75/5.5 → 아래). 저층은 여전히 거의 안 보일 만큼 작게 유지하고, 고층일수록 "거의
+  // 넘어갈 듯한" 각도까지 허용한다.
+  BALANCE_MAX_TILT_BY_LAYER: [       // stackTargetTilt의 층수별 상한(도).
+    { maxLayer: 3, value: 0.8 },
+    { maxLayer: 6, value: 1.8 },
+    { maxLayer: 9, value: 3.0 },
+    { maxLayer: 12, value: 5.0 },
+    { maxLayer: 15, value: 6.5 },
+    { maxLayer: Infinity, value: 8.0 },
+  ],
+  MAX_NORMAL_TILT: 9.0,              // 모든 층수 공통 절대 상한(도) — 위 표와 별개의 최종 안전망.
+                                     // COLLAPSE 연출(아래, 최대 50도급 회전)과는 전혀 다른 스케일.
+  BALANCE_SPRING: 220,               // 스프링 강성(rad/s² per rad 오차) — 클수록 목표를 빠르게 쫓음
+  BALANCE_DAMPING: 0.15,             // 초당 각속도 유지 비율(0~1). 매 프레임 Math.pow(DAMPING, dt)로
+                                     // 적용해 프레임레이트와 무관하게 감쇠하되, 다 멈추기 전에
+                                     // 다음 재료를 받는 경우가 흔하도록(§8) 너무 세게 걸지 않는다.
+  LANDING_BALANCE_IMPULSE: 1.6,      // 착지 순간 normalizedLandingOffset·sensitivity에 곱해 더하는
+                                     // 각속도 충격량 — 오른쪽 끝에 놓으면 즉시 오른쪽으로 휘청(§9)
+  PERFECT_BALANCE_DAMPING: 0.75,     // PERFECT 착지 시 stackAngularVelocity·stackTilt에 그대로 곱해
+                                     // 살짝 안정화(§10). impulse 자체는 (1-0.75)=25%만 적용해 "매우
+                                     // 작게" 만든다 — 하나의 값으로 세 가지 보정을 겸한다.
+  TILT_COM_FACTOR: 1.0,              // 기울기를 실제 픽셀 흔들림(및 그로 인한 유효 COM 이동)으로
+                                     // 환산하는 배율. shearPx = heightAboveBase * tan(tilt) * 이 값.
+                                     // 렌더링과 지지 판정이 이 값 하나를 공유해 "보이는 대로 판정"
+                                     // (§12)이 항상 성립한다.
+  COLLAPSE_GRACE_TIME: 100,          // ms. 흔들림만으로 유효 COM이 COLLAPSE 영역에 들어가도 이
+                                     // 시간 이상 머물러야 실제로 무너진다(스프링 관성으로 경계를
+                                     // 스치듯 지나가는 것까지 즉시 무너뜨리면 억울함, §18). 단
+                                     // 극단적으로(지지 밖으로 완전히 벗어남) 위험하면 즉시 무너짐.
 
   // 붕괴 애니메이션 v2 — "버티다가 한쪽으로 넘어지는" 3단계. pivot(무너지는 접점의 지지 가장자리)을
   // 축으로 상단 스택 전체가 먼저 하나의 강체처럼 기울고, 임계각을 넘은 뒤에야 위층부터 순차적으로
   // 분리되어 각자 중력+관성으로 떨어진다. 전체 합이 약 1.5초(§20 타임라인).
   COLLAPSE_HOLD_MS: 100,             // LAND IMPACT 이후 추가로 "버티는" 시간(임팩트 130ms와 합쳐 약 230ms)
   COLLAPSE_BRACE_MS: 150,            // 1단계: 아주 짧게 버티는 느낌(0→BRACE_ANGLE)
-  COLLAPSE_BRACE_ANGLE_DEG: 2,
-  COLLAPSE_TOPPLE_MS: 300,           // 2단계: 상단 스택 전체가 pivot 축으로 함께 기욺(BRACE_ANGLE→TOPPLE_ANGLE_CAP)
-  COLLAPSE_TOPPLE_ANGLE_CAP_DEG: 14, // 강체로 붙어있는 동안의 회전각 상한(12~18도 권장, 세로로 서지 않게)
+  COLLAPSE_BRACE_ANGLE_DEG: 3,
+  // 2026-10-02: "탑이 무너지듯이 옆으로 넘어가면 좋겠다"는 피드백으로 토플 각도를 키웠다
+  // (14도 → 24도). 세로로 서는 90도와는 여전히 거리가 멀고, 분리 전 "확실히 옆으로
+  // 기울어 넘어가는" 느낌이 나는 수준까지만 올렸다. 시간도 조금 늘려(300→360ms) 커진
+  // 각도가 눈에 들어올 여유를 준다.
+  COLLAPSE_TOPPLE_MS: 360,           // 2단계: 상단 스택 전체가 pivot 축으로 함께 기욺(BRACE_ANGLE→TOPPLE_ANGLE_CAP)
+  COLLAPSE_TOPPLE_ANGLE_CAP_DEG: 24, // 강체로 붙어있는 동안의 회전각 상한(세로로 서지 않게 90도와는 충분히 거리 둠)
   COLLAPSE_DETACH_STAGGER_MS: 50,    // 3단계: 위층부터 분리되는 시간차(층당)
-  COLLAPSE_DETACH_EXTRA_ANGLE_DEG: 20, // 분리된 뒤 TOPPLE_ANGLE_CAP 위에 추가로 더 돌 수 있는 한도
+  COLLAPSE_DETACH_EXTRA_ANGLE_DEG: 26, // 분리된 뒤 TOPPLE_ANGLE_CAP 위에 추가로 더 돌 수 있는 한도(20→26)
   COLLAPSE_DETACH_ANGVEL: 0.7,       // 분리 후 각속도(rad/s) — 빠르게 빙글빙글 돌지 않도록 작게
   COLLAPSE_DETACH_VX_BASE: 170,      // 분리 순간 수평 속도 기준값(logical px/s), 위층일수록 배율 증가
   COLLAPSE_DETACH_VY_BASE: 30,       // 분리 순간 수직 속도 기준값(logical px/s) — 처음엔 작고 중력으로 증가
   COLLAPSE_GRAVITY: 1500,            // 분리 후 낙하 가속도 (logical px/s^2)
-  COLLAPSE_DURATION_MS: 1550,        // 무너지는 연출 총 시간(§20: 0.15+0.30+분리·낙하+settling ≈ 1.5~1.6초)
+  COLLAPSE_DURATION_MS: 1550,        // 무너지는 연출 총 시간(§20: 0.15+0.36+분리·낙하+settling ≈ 1.5~1.6초)
 
   RESULT_DELAY_MS: 500,             // gameover 화면 전환 전 마지막 대기(붕괴 애니메이션 종료 후)
   PERFECT_FLASH_MS: 600,            // "PERFECT!" 노출 시간 (명세 §9 그대로: 약 0.6초)
@@ -202,6 +256,14 @@ BS.speedMultiplierForLayer = function (layerIndex) {
 /* 층수 구간별 PERFECT 판정 범위(logical px) (난이도 2, CONFIG.PERFECT_THRESHOLD_TIERS 표 그대로) */
 BS.perfectThresholdForLayer = function (layerIndex) {
   return tierLookup(BS.CONFIG.PERFECT_THRESHOLD_TIERS, layerIndex, 'threshold');
+};
+
+/* 동적 균형/흔들림 — 층수 구간별 민감도·목표 기울기 상한(play.js가 매 프레임 사용) */
+BS.balanceSensitivityForLayer = function (layerCount) {
+  return tierLookup(BS.CONFIG.BALANCE_SENSITIVITY_BY_LAYER, layerCount, 'value');
+};
+BS.balanceMaxTiltDegForLayer = function (layerCount) {
+  return tierLookup(BS.CONFIG.BALANCE_MAX_TILT_BY_LAYER, layerCount, 'value');
 };
 
 BS.spawnScreenY = function () {

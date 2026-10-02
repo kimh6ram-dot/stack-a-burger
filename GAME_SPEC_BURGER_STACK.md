@@ -469,24 +469,28 @@ pivotY = layer[pivotIndex].topY                                // 그 접점의 
 
 | 구간 | 길이 | 내용 |
 |---|---|---|
-| 1. BRACE(버팀) | `COLLAPSE_BRACE_MS`(150ms) | 상단 스택 전체가 pivot 축으로 0°→`COLLAPSE_BRACE_ANGLE_DEG`(2°)까지만 살짝 기움. 입력 잠금, 새 재료 생성 금지 |
-| 2. TOPPLE(함께 기울기) | `COLLAPSE_TOPPLE_MS`(300ms) | 같은 pivot 축으로 2°→`COLLAPSE_TOPPLE_ANGLE_CAP_DEG`(14°)까지 **상단 스택 전체가 하나의 강체처럼** 계속 회전. 이 구간까지는 레이어가 분리되지 않는다 |
-| 3. DETACH+FALL(분리·낙하) | 나머지(약 1.1초) | 위층부터 `COLLAPSE_DETACH_STAGGER_MS`(50ms)씩 시간차를 두고 레이어가 하나씩 분리된다. 분리되는 순간의 pivot 회전각을 그대로 이어받아 독립적인 중력+속도 낙하로 전환 |
+| 1. BRACE(버팀) | `COLLAPSE_BRACE_MS`(150ms) | 상단 스택 전체가 pivot 축으로 0°→`COLLAPSE_BRACE_ANGLE_DEG`(3°)까지만 살짝 기움. 입력 잠금, 새 재료 생성 금지 |
+| 2. TOPPLE(함께 기울기) | `COLLAPSE_TOPPLE_MS`(360ms) | 같은 pivot 축으로 3°→`COLLAPSE_TOPPLE_ANGLE_CAP_DEG`(24°)까지 **상단 스택 전체가 하나의 강체처럼** 계속 회전. 이 구간까지는 레이어가 분리되지 않는다 |
+| 3. DETACH+FALL(분리·낙하) | 나머지(약 1.0초) | 위층부터 `COLLAPSE_DETACH_STAGGER_MS`(50ms)씩 시간차를 두고 레이어가 하나씩 분리된다. 분리되는 순간의 pivot 회전각을 그대로 이어받아 독립적인 중력+속도 낙하로 전환(`COLLAPSE_DETACH_EXTRA_ANGLE_DEG`=26°까지 추가 회전 가능, 최대 24+26=50°) |
 
 ### 강체 회전(1·2단계) 수식
 
 아직 분리되지 않은 레이어는 매 프레임 pivot을 기준으로 실시간 회전한다.
 
 ```js
-angle(t) = (t 구간에 따라 0→2°→14°로 보간) * collapseDirection
+angle(t) = (t 구간에 따라 0→3°→24°로 보간) * collapseDirection
 layer.center' = rotate(layer.center, pivot, angle(t))   // 중심 이동
 layer.collAngle = angle(t)                                // 스프라이트 자체도 같은 각도로 회전
 ```
 
-14°가 상한이다(12~18도 권장 범위, §14 "세로로 서지 않게"). 렌더러는
-캔버스에서 `translate(pivot) → rotate → translate(-pivot)`이 아니라, 매
-프레임 새 중심 오프셋(`collX`/`collY`)과 자체 회전(`collAngle`)을 따로
-계산해 적용한다(§6 레이어 필드).
+24°가 TOPPLE 단계 상한이다(2026-10-02: "탑이 무너지듯이 옆으로 넘어가면
+좋겠다"는 피드백으로 기존 14°에서 올림 — 분리 후 추가 회전까지 더하면
+최대 50°까지 가지만, 여전히 세로로 서는 90°와는 충분히 거리를 둔다, §14
+"세로로 서지 않게"). 렌더러는 캔버스에서 `translate(pivot) → rotate →
+translate(-pivot)`이 아니라, 매 프레임 새 중심 오프셋(`collX`/`collY`)과
+자체 회전(`collAngle`)을 따로 계산해 적용한다(§6 레이어 필드). 붕괴
+시작 순간 흔들림(sway) 중이었다면 `layer.collSwayBaseX`로 그 기울기를
+회전의 "0도 시작점"으로 이어받는다(§22).
 
 ### 분리(3단계)
 
@@ -971,3 +975,196 @@ PADDING`에 값이 모여 있고, 캔버스(플레이·저장 이미지)는 이 
 플로우 무회귀) 전체 통과(2026-10-01, playwright-core + 로컬 Chrome 헤드리스,
 `page.waitForEvent('download')`로 실제 다운로드 파일까지 저장해 0바이트가
 아님을 확인).
+
+---
+
+## 22. 동적 균형/좌우 흔들림(stack sway) — 2026-10-02 신설
+
+"착지 후 완전 정지"를 "중심을 잡으며 서 있는 높은 탑"으로 바꾸는 기능.
+기존 기능(이동 속도 단계, overlap, COM 판정, COLLAPSE 연출, 빵 얹기, 워터마크
+등)은 전혀 건드리지 않고, 이 동적 흔들림만 추가했다. **이전의 `WOBBLE_MAX_
+ANGLE`/`WOBBLE_DECAY_MS`(착지 직후 짧게만 흔들리는 단순 연출)는 완전히
+제거하고 이 시스템으로 대체했다** — 둘을 동시에 두면 회전이 이중으로 겹친다.
+
+### 핵심 상태 (`play.js`)
+
+```
+stackTilt            현재 실제 기울기(rad)
+stackAngularVelocity 현재 각속도(rad/s)
+stackTargetTilt      이번 프레임 COM 기준 목표 기울기(rad)
+swayCollapseTimer    흔들림만으로 위험 구간에 머문 누적 시간(ms)
+```
+
+### Pivot과 "전단(shear)" — 회전이 아니다
+
+전체가 한 덩어리로 빙글빙글 도는 게 아니라(§14 금지), **바닥(`bottom_bun`의
+밑면, 월드 y=0)을 pivot**으로 두고 레이어마다 "pivot으로부터의 높이"에
+비례해 좌우로 shear(전단)시킨다 — 바닥은 거의 그대로, 위로 갈수록 많이
+움직인다.
+
+```js
+heightAboveBase(layer) = -(layer.topY + layer.visualHeight)   // 월드 y=0이 바닥
+shearOffsetX(layer) = heightAboveBase(layer) * tan(stackTilt) * TILT_COM_FACTOR
+```
+
+`bottom_bun`은 `heightAboveBase=0`이라 구조적으로 절대 좌우로 미끄러지지
+않는다(§22 금지 목록 "bottom bun이 미끄러짐" 자동 충족). 이 shear 공식
+하나를 **렌더링(`renderer.js`)과 물리 판정(아래) 양쪽이 그대로 공유**해서
+"보이는 대로 판정"이 항상 성립한다(§12~13).
+
+### 목표 기울기 — 정적 COM 기반, 층수별 민감도
+
+```js
+comX = 전체 stack의 x+width/2 평균 (정적/정지 좌표 — 순환 의존 방지)
+normalizedOffset = (comX - baseCenterX) / (baseWidth/2)   // -1~1
+rawDeg = normalizedOffset * BALANCE_SENSITIVITY_BY_LAYER[layer] * BALANCE_TILT_BASE_DEG
+targetDeg = clamp(rawDeg, ±BALANCE_MAX_TILT_BY_LAYER[layer])
+targetDeg = clamp(targetDeg, ±MAX_NORMAL_TILT)   // 전 층수 공통 최종 안전망
+```
+
+`BALANCE_TILT_BASE_DEG`는 §25 목록엔 없지만 추가한 보정 상수다 — §5의
+sensitivity 표(0.45~2.10)를 그대로 "도(degree)"로 쓰면 §6이 요구하는 범위
+(1~3층 ±0.5도 ↔ 16층+ ±5~6도, 약 11배 차)에 비해 sensitivity 자체의 비율폭
+(약 4.7배)이 너무 좁아 양쪽을 동시에 맞출 수 없었다. 처음엔 2.3으로 뒀는데
+**실제 헤드리스 플레이테스트에서 무작위 손 떨림 수준의 편차가 전체 평균에
+묻혀 10층 이상에서도 체감 기울기가 0.1~0.3도에 그쳤다** — 8.0으로 올려
+재측정하니 다양한 방향으로 어긋나게 쌓는 현실적인 플레이에서 9~12층 구간이
+2.4~4.2도까지 올라가 §6 목표 범위(10~12층 ±3.0~4.0도)에 실제로 들어왔다.
+이후 "탑이 무너지듯이 옆으로 넘어가면 좋겠다"는 피드백으로 한 번 더
+올렸다(8.0→11.0, 층수별 상한 `BALANCE_MAX_TILT_BY_LAYER`/`MAX_NORMAL_TILT`도
+함께 상향) — 평소 흔들림 자체가 "진짜 넘어갈 듯"하게 더 크게 보이도록
+(§26 참고).
+
+### 스프링-댐퍼 — target으로 바로 이동하지 않음
+
+```js
+angularAccel = (targetTilt - tilt) * BALANCE_SPRING
+angularVelocity += angularAccel * dt
+angularVelocity *= Math.pow(BALANCE_DAMPING, dt)   // "초당 유지비율"로 해석해
+                                                     // 프레임레이트 무관하게 감쇠
+tilt += angularVelocity * dt
+```
+`BALANCE_DAMPING`(0.15)은 "1초 뒤 각속도가 15%만 남는다"는 뜻으로, 매 프레임
+`Math.pow(0.15, dt)`를 곱해 적용한다 — 저층에서는 몇 번 진동 후 금방
+가라앉고, 고층에서는(목표가 더 자주/크게 바뀌므로) 다음 재료가 올 때까지도
+잔진동이 남는 경우가 흔하다(§8). 댐핑 상수 자체는 층수와 무관하게 하나만
+쓴다 — 설계상 §25가 `BALANCE_DAMPING`을 층수별 표가 아닌 단일 값으로
+요구했고, 실제로도 진폭(sensitivity가 좌우)이 커질수록 "눈에 보이는 수준
+아래로 가라앉는 데 걸리는 시간"이 자연히 길어지므로 댐핑 자체를 층수별로
+나눌 필요가 없었다.
+
+### 착지 balance impulse + PERFECT 보상
+
+`finalizeDrop()`에서 착지 직후:
+
+```js
+supportCenterX = 흔들림 보정된 상단 레이어 중심
+landingOffset  = 새 재료 중심 - supportCenterX
+impulse        = (landingOffset/(재료폭/2)) * LANDING_BALANCE_IMPULSE * sensitivity[layer]
+if (perfect) {
+  impulse *= (1 - PERFECT_BALANCE_DAMPING)   // "매우 작게"(25%만)
+  stackAngularVelocity *= PERFECT_BALANCE_DAMPING
+  stackTilt *= PERFECT_BALANCE_DAMPING        // 중앙 쪽으로 살짝만 보정(완전 수직화 금지)
+}
+stackAngularVelocity += impulse
+```
+`PERFECT_BALANCE_DAMPING`(0.75) 하나로 "impulse 축소 + 각속도 감쇠 + 기울기
+완화" 세 가지를 겸한다 — §25가 요구한 키 이상으로 늘리지 않기 위함이다.
+
+### 착지/흔들림 판정은 "보이는 위치" 기준(§12~13)
+
+`finalizeDrop()`은 더 이상 `stack`을 그대로 쓰지 않고, 매번
+`shearedStackSnapshot()`(각 레이어 x에 그 순간의 shear를 더한 임시 배열)을
+만들어 `BS.physics.evaluateStability`에 넘긴다 — PERFECT 판정의 "top 중심"도
+이 보정된 위치를 쓴다. 즉 탑이 오른쪽으로 기울어 있으면 실제로 오른쪽으로
+쏠린 면 위에 착지시켜야 SAFE가 나온다 — "두 움직임(내려오는 재료 + 흔들리는
+상단면)을 동시에 보고 맞춰야" 하는 난이도(§13)가 여기서 생긴다.
+
+### 흔들림 자체가 위험해지는 상황 (§16~18)
+
+새 재료 착지와 무관하게, **매 프레임**(`playing`/`release`/`falling` 중 —
+`settling`은 제외, 아래 참고) 현재 shear가 반영된 스택 자체의 안정성을
+`BS.physics.evaluateExistingStability`(새 함수, 새 레이어를 붙이지 않고
+기존 접점만 스캔)로 검사한다. COLLAPSE 판정이면 `COLLAPSE_GRACE_TIME`
+(100ms) 이상 머물렀을 때만 실제로 무너뜨린다 — 스프링 관성으로 경계를
+스치듯 지나가는 것까지 즉시 무너뜨리면 억울하기 때문(§18). 단
+`supportRatio`가 `COLLAPSE_SUPPORT_RATIO`의 절반 미만이거나 `normalizedMargin`
+이 -0.3 미만인 "완전히 벗어난" 경우는 grace time 없이 즉시 무너진다.
+
+`settling`(막 착지해 LAND IMPACT 연출 중)은 이 연속 체크에서 **의도적으로
+제외**했다 — 그 착지의 tier는 이미 `finalizeDrop()`이 결정했고, 그 결과에
+따른 COLLAPSE 전환은 settling 자신의 타이머가 임팩트 연출을 다 보여준 뒤
+처리한다(기존 그대로). 포함시키면 같은 프레임에 끼어들어 착지 임팩트
+연출 없이 바로 붕괴해버리는 버그가 생겨, 구현 중 실제로 이 문제를 발견하고
+제외시켰다.
+
+### COLLAPSE로의 매끄러운 전환
+
+흔들리던 중 COLLAPSE가 시작되면(착지로든, 위 연속 체크로든) `beginCollapse`가
+그 순간의 shear 값을 `layer.collSwayBaseX`로 저장해 회전의 "0도 시작점"으로
+삼는다 — 구조적(정지) 좌표로 순간 복귀하며 "탁" 끊기지 않고, 흔들리던
+위치에서 그대로 넘어가는 모습으로 이어진다(`rotateOffsetAroundPivot`에
+`baseOffsetX` 파라미터 추가). `beginCollapse` 호출 이후로는 `stackTilt`
+갱신이 멈춘다(`swayActive()`가 `collapsing`을 포함하지 않음) — 평상시엔
+전체 stack sway, 붕괴 후엔 개별 레이어 물리로 명확히 구분된다(§15).
+
+### 빵 얹기 완성 후
+
+`topping`/`topping-settle`/`completed` 상태에서는 `stackTilt` 갱신이
+멈춘다(마지막 값 그대로 고정) — "플레이 결과 그대로 보여준다"는 완성 화면
+원칙과 같은 맥락이다. 저장 이미지(export.js)는 원래부터 layer의 raw x만
+쓰므로 이 기울기와 무관하게 항상 수직으로 저장된다(기존 동작 유지, 이번
+기능으로 변경하지 않음).
+
+### config.js (§25 요구 항목 그대로)
+
+| 키 | 값 |
+|---|---|
+| `BALANCE_SENSITIVITY_BY_LAYER` | 1~3:0.45, 4~6:0.70, 7~9:1.05, 10~12:1.45, 13~15:1.80, 16+:2.10 |
+| `BALANCE_MAX_TILT_BY_LAYER` | 1~3:0.8°, 4~6:1.8°, 7~9:3.0°, 10~12:5.0°, 13~15:6.5°, 16+:8.0° |
+| `BALANCE_SPRING` | 220 |
+| `BALANCE_DAMPING` | 0.15(초당 유지비율) |
+| `LANDING_BALANCE_IMPULSE` | 1.6 |
+| `PERFECT_BALANCE_DAMPING` | 0.75 |
+| `TILT_COM_FACTOR` | 1.0 |
+| `COLLAPSE_GRACE_TIME` | 100ms |
+| `MAX_NORMAL_TILT` | 9.0° |
+| `BALANCE_TILT_BASE_DEG`(추가) | 11.0° |
+
+(1차 보정값은 §5/§6 그대로 0.5/1.2/2.0/3.5/4.75/5.5°·상한 6.5°·base 8.0°였고,
+"탑이 무너지듯이" 피드백으로 위 표의 2차 보정값으로 한 번 더 올렸다.)
+
+COLLAPSE 연출도 같은 피드백으로 함께 키웠다: `COLLAPSE_BRACE_ANGLE_DEG`
+2°→3°, `COLLAPSE_TOPPLE_ANGLE_CAP_DEG` 14°→24°(§9), `COLLAPSE_DETACH_
+EXTRA_ANGLE_DEG` 20°→26°(최대 회전 50°) — 세로로 서는 90°와는 여전히
+거리를 뒀다.
+
+### QA
+
+`tools/qa-sway.js` — 명세 §19~21 TEST A~D + 완성 후 고정 확인(E), 2차 보정
+이후 재실행 결과(전체 통과):
+
+- **TEST A(중앙 위주, ±3px 손 떨림 수준 15회)**: tilt -0.14°~0.23° 범위,
+  15층까지 생존, 10° 이내로 과도하지 않음.
+- **TEST B(오른쪽으로 폭의 16%씩 반복 편향)**: tilt 1.88°→3.07°로 증가하다
+  4층에서 COLLAPSE.
+- **TEST C(초반 오른쪽 편향 후 왼쪽 보정)**: 편향 직후 1.06° → 보정 후
+  -0.07°로 중앙을 지나 반대쪽까지 회복, 즉시 무너지지 않고 생존.
+- **TEST D(11층 도달 후 1.5초간 추가 입력 없이 관찰)**: 150ms 간격 10회
+  샘플링에서 1.75°~2.22° 범위로 계속 변함(완전 정지 아님, 1차 보정 때의
+  0.19~0.32°보다 훨씬 또렷하게 체감됨).
+- **TEST E(빵 얹기 완성 후)**: completed 진입 후 500ms가 지나도 tilt가
+  소수점 셋째 자리까지 완전히 동일(더 이상 갱신되지 않음, 고정 확인).
+
+`tools/qa-collapse-angle.js`(스크래치패드)로 COLLAPSE 프레임별 각도를
+실측: 0ms 0°→200ms 12.7°→300ms 21.5°(분리 시작 직전)→400ms 27.2°(분리)
+→600ms 38.8°→1000ms 50°(상한). 스크린샷으로 확인한 결과 분리 전까지
+확실히 "옆으로 기울어 넘어가는" 모습이고, 분리 후에도 세로로 서는 각도
+근처에는 가지 않아 자연스럽다.
+
+추가로 `tools/qa-sway-visual.js`(스크래치패드)로 12층까지 실제 스크린샷을
+찍어, 베이스 대비 상단이 눈에 띄게 오른쪽으로 쏠려 보이는 "기울어진 탑"
+실루엣을 육안으로 확인했다(레이어별 tilt 0.70°→4.22°까지 분포, 1차 보정
+기준 — 2차 보정 후에는 이보다 더 크게 기운다). 기존 회귀 스위트(`qa.js`,
+`qa-topping.js`, `measure-contact-gaps.js`, `qa-floor-resize.js`) 전부
+재검증 통과 — 이번 기능이 기존 동작을 깨뜨리지 않았다.

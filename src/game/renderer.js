@@ -40,28 +40,25 @@ BS.renderer = (function () {
     var cam = snap.cameraY;
     var stack = snap.stack;
     var isCollapsing = (snap.state === 'collapsing' || snap.state === 'gameover-wait' || snap.state === 'gameover');
+
+    // 동적 균형/흔들림(2026-10-02) — 바닥을 pivot 삼아 높이에 비례해 좌우로 전단(shear)시킨다.
+    // play.js의 shearedStackSnapshot()/beginCollapse()와 같은 공식을 공유해야 "보이는 대로
+    // 판정"이 성립한다. COLLAPSE 연출 중에는 각 레이어의 collX가 이미 그 전환 시점의 흔들림을
+    // 반영해 이어받으므로(§15) 여기서 추가로 shear를 더하지 않는다(이중 적용 방지).
+    var TILT_FACTOR = BS.CONFIG.TILT_COM_FACTOR;
+    var tiltTan = Math.tan(snap.stackTilt || 0);
+    function shearXFor(layer) {
+      if (isCollapsing) return 0;
+      var heightAboveBase = -(layer.topY + layer.visualHeight);
+      return heightAboveBase * tiltTan * TILT_FACTOR;
+    }
     // topping-settle(빵 얹기 착지 임팩트)도 settling과 같은 압축/복귀 연출을 공유한다.
     var settlingTopIndex = (snap.state === 'settling' || snap.state === 'topping-settle') ? stack.length - 1 : -1;
-
-    // 흔들림(UNSTABLE) 피벗: 바닥(맨 아래 레이어) 중심의 화면 좌표
-    var pivotX = stageW / 2, pivotY = stageH;
-    if (stack.length) {
-      var base = stack[0];
-      pivotX = base.x + base.width / 2;
-      pivotY = (base.topY + base.visualHeight) - cam;
-    }
-    var applyWobble = !isCollapsing && snap.wobbleAngle;
-    if (applyWobble) {
-      ctx.save();
-      ctx.translate(pivotX, pivotY);
-      ctx.rotate(snap.wobbleAngle);
-      ctx.translate(-pivotX, -pivotY);
-    }
 
     for (var i = 0; i < stack.length; i++) {
       if (i === settlingTopIndex) continue; // settling 임팩트는 아래에서 별도로 그림
       var l = stack[i];
-      var x = l.x, y = l.topY - cam, w = l.width, h = l.visualHeight;
+      var x = l.x + shearXFor(l), y = l.topY - cam, w = l.width, h = l.visualHeight;
       if (isCollapsing && l.collActive) {
         ctx.save();
         var cx = x + w / 2 + l.collX, cy = y + h / 2 + l.collY;
@@ -81,10 +78,8 @@ BS.renderer = (function () {
       var squash = BS.CONFIG.LANDING_SQUASH_PX * Math.sin(t * Math.PI); // 눌렸다 복귀, 오버슈트 없음
       var dy = (top.topY - cam) + squash;
       var dh = Math.max(2, top.visualHeight - squash);
-      drawFull(top.ingredient, top.x, dy, top.width, dh);
+      drawFull(top.ingredient, top.x + shearXFor(top), dy, top.width, dh);
     }
-
-    if (applyWobble) ctx.restore();
 
     if (!isCollapsing && (snap.state === 'playing' || snap.state === 'release' || snap.state === 'falling') && snap.current) {
       var c = snap.current;
