@@ -4,6 +4,11 @@
 window.BS = window.BS || {};
 
 BS.CONFIG = {
+  // "엄청 쉬운 베타" 모드(2026-10-02, beta-easy 브랜치 전용). true면 쌓인 햄버거의 동적 균형/
+  // 흔들림(stack sway)을 전부 끄고 COLLAPSE 임계값도 관대하게 완화한다. V1 정식 버전으로
+  // 되돌릴 때는 이 값 하나만 false로 바꾸면 된다(아래 모든 V1 원래 수치는 그대로 보존돼
+  // 있고, 덮어쓰지 않았다 — 파일 맨 끝의 EASY_BETA_MODE 분기 참고).
+  EASY_BETA_MODE: true,
   LOGICAL_WIDTH: 375,               // 기준 디자인 폭(logical px). 실제 화면 폭은 CSS에서 이 값으로 스케일링.
   PLAY_MARGIN: 4,                   // 재료가 왕복하는 좌우 경계 여백(게임 stage 기준 고정 — 스택 위치와 무관, §"이동 범위 실측" 참고)
   INITIAL_STACK_WIDTH_RATIO: 0.36,  // 모든 재료가 공유하는 고정 폭 = LOGICAL_WIDTH * 이 값. 이 폭은 게임 내내 변하지 않는다.
@@ -102,9 +107,9 @@ BS.CONFIG = {
   // interval) 안 어디에 있는지, 가장자리까지 남은 여유(normalizedMargin)로 판정한다.
   // 접점이 하나라도 COLLAPSE면 그 접점(가장 아래에서 처음 발견되는 곳)이 무너지는 지점이 된다.
   SAFE_SUPPORT_RATIO: 0.60,         // 접점의 supportWidth/재료폭. 이 이상이고 margin도 충분해야 SAFE
-  COLLAPSE_SUPPORT_RATIO: 0.42,     // 이 미만이면 그 자체로 COLLAPSE
+  COLLAPSE_SUPPORT_RATIO: 0.42,     // 이 미만이면 그 자체로 COLLAPSE (V1 정식값 — EASY_BETA_MODE일 땐 파일 끝의 분기에서 0.32로 덮어씀)
   SAFE_COM_MARGIN: 0.22,            // normalizedMargin(0.5=완전 중앙, 0=가장자리, 음수=지지 밖) 이 이상이면 안전
-  COLLAPSE_COM_MARGIN: 0.10,        // 이 미만이면(또는 음수, 즉 지지 밖) COLLAPSE
+  COLLAPSE_COM_MARGIN: 0.10,        // 이 미만이면(또는 음수, 즉 지지 밖) COLLAPSE (V1 정식값 — EASY_BETA_MODE일 땐 0.08로 덮어씀)
   // 그 사이는 UNSTABLE.
 
   // "같은 절대 위치(가장자리)를 계속 정확히 노리는" 플레이는 매번 자기들끼리는 완벽히 정렬돼
@@ -209,6 +214,18 @@ BS.CONFIG = {
   WATERMARK_OPACITY: 0.42,          // 0.35~0.55 권장 범위 중간값(너무 흐리지도 진하지도 않게)
   WATERMARK_PADDING: 16,            // 가장자리 안전 여백(logical px) — PLAY_FLOOR_PADDING과 동일한 감각
 };
+
+// EASY_BETA_MODE 전용 덮어쓰기(beta-easy 브랜치, 2026-10-02) — 위 BS.CONFIG 안의 값은
+// 전부 V1 정식 수치 그대로 남겨두고, 여기서 "값만" 베타용으로 완화한다. 코드/수식은
+// 하나도 바꾸지 않는다(SAFE/COLLAPSE 판정 로직은 physics.js 그대로) — EASY_BETA_MODE를
+// false로 되돌리기만 하면 이 블록 전체가 그냥 실행되지 않아 V1 수치로 완전히 복원된다.
+if (BS.CONFIG.EASY_BETA_MODE) {
+  // COLLAPSE_SUPPORT_RATIO 0.42 → 0.32(약 24% 완화), COLLAPSE_COM_MARGIN 0.10 → 0.08
+  // (약 20% 완화) — §9 "현재보다 15~25% 더 낮게 / COM margin도 20% 정도 관대하게" 그대로.
+  // SAFE_SUPPORT_RATIO/SAFE_COM_MARGIN(=UNSTABLE 경계)은 요청에 없어 건드리지 않았다.
+  BS.CONFIG.COLLAPSE_SUPPORT_RATIO = 0.32;
+  BS.CONFIG.COLLAPSE_COM_MARGIN = 0.08;
+}
 
 function tierLookup(tiers, layerIndex, key) {
   for (var i = 0; i < tiers.length; i++) {

@@ -297,10 +297,14 @@ BS.play = (function () {
     var landingOffset = (current.x + current.width / 2) - supportCenterX;
     var normalizedLandingOffset = landingOffset / (current.width / 2);
     var landingSensitivity = BS.balanceSensitivityForLayer(layerCount);
-    var impulse = normalizedLandingOffset * C.LANDING_BALANCE_IMPULSE * landingSensitivity;
-    if (perfect) impulse *= (1 - C.PERFECT_BALANCE_DAMPING); // "매우 작게"
-    pendingSwayImpulse = { impulse: impulse, perfect: perfect };
-    swayFreezeThisFrame = true; // newLayer가 막 stack에 들어갔다 — 이번 프레임의 target 재계산은 건너뜀
+    // EASY_BETA_MODE: 착지 balance impulse 자체를 만들지 않는다(§5 "landing balance impulse"
+    // 비활성화) — stackAngularVelocity/stackTilt가 영구히 0으로 고정되어 흔들림이 전혀 없다.
+    if (!C.EASY_BETA_MODE) {
+      var impulse = normalizedLandingOffset * C.LANDING_BALANCE_IMPULSE * landingSensitivity;
+      if (perfect) impulse *= (1 - C.PERFECT_BALANCE_DAMPING); // "매우 작게"
+      pendingSwayImpulse = { impulse: impulse, perfect: perfect };
+      swayFreezeThisFrame = true; // newLayer가 막 stack에 들어갔다 — 이번 프레임의 target 재계산은 건너뜀
+    }
 
     BS.audio.playThump(perfect ? 1 : (result.tier === 'safe' ? 0.85 : 0.6));
 
@@ -494,7 +498,11 @@ BS.play = (function () {
 
     if (perfectFlashTimer > 0) perfectFlashTimer = Math.max(0, perfectFlashTimer - dt);
 
-    if (swayActive()) {
+    // EASY_BETA_MODE: 스프링-댐퍼 적분 자체를 아예 돌리지 않는다 — stackTilt/stackAngularVelocity가
+    // reset() 이후 영구히 0으로 고정되어(위 impulse도 안 만들어지므로) 흔들림이 전혀 없다. shear
+    // 공식(swayOffsetForHeight/renderer.js의 shearXForHeight)은 tan(stackTilt)=tan(0)=0이라
+    // 자동으로 0이 되므로 따로 건드릴 필요가 없다(§6 "착지 X 위치는 반드시 유지"도 자동 충족).
+    if (swayActive() && !C.EASY_BETA_MODE) {
       if (swayFreezeThisFrame) {
         // 이번 프레임에 막 착지한 레이어가 stack에 들어갔다 — COM이 그 레이어를 포함해 바로
         // 바뀌므로, 지금 target을 다시 계산하면 "착지 프레임 자체"에서 또 한 번 미세하게
@@ -520,7 +528,8 @@ BS.play = (function () {
     // settling은 제외한다 — 그 착지의 tier는 이미 finalizeDrop()이 결정했고, 그 결과에 따른
     // COLLAPSE 전환은 settling 자신의 타이머(§위 분기)가 LAND IMPACT 연출을 다 보여준 뒤에
     // 처리한다. 여기서까지 같은 프레임에 끼어들면 임팩트 연출 없이 바로 붕괴해버린다.
-    if (state === 'playing' || state === 'release' || state === 'falling') {
+    // EASY_BETA_MODE: 이 체크 자체를 건너뛴다 — 베타는 "정적 위치 기반 안정성 판정만" 쓴다(§8).
+    if (!C.EASY_BETA_MODE && (state === 'playing' || state === 'release' || state === 'falling')) {
       var swayResult = BS.physics.evaluateExistingStability(shearedStackSnapshot(), C);
       if (swayResult.tier === 'collapse') {
         swayCollapseTimer += dt * 1000;
